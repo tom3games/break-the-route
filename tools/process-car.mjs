@@ -1,3 +1,5 @@
+// 使い方: 作業用フォルダで npm i @gltf-transform/core @gltf-transform/extensions @gltf-transform/functions meshoptimizer sharp
+//         CarConcept.glb を置いて node process-car.mjs（スマホ用は OUT=car_lite.glb RATIO=0.12 ERR=0.003 TEX=512）
 // CarConcept（Khronos, CC-BY 4.0, Eric Chadwick / DGG）をゲーム用に軽くする。ロゴは全部外す
 import { NodeIO } from '@gltf-transform/core'
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions'
