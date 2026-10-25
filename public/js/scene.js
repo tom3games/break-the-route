@@ -1,6 +1,8 @@
 // コースの見た目を作る。形はすべてコードで組む（外部モデルなし）。
 import * as THREE from 'three'
-import { Builder, windowTexture, textTexture } from './geo.js'
+import { Builder, textTexture } from './geo.js'
+import { pbr, boxMap, terrainMaterial } from './look.js'
+import { buildForest, buildTufts } from './trees.js'
 import { terrain, toWorld, slabTop, BOUNDS, CANYON } from '../shared/track.js'
 import { DESTRUCT } from '../shared/config.js'
 
@@ -14,10 +16,22 @@ export function buildScene(scene, world) {
   const root = new THREE.Group()
   scene.add(root)
   const vc = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.02 })
-  const winTex = windowTexture()
-  const buildingMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: winTex, roughness: 0.85 })
+  // 実写の材質（箱投影で貼る）。頂点色が掛け合わさるので、建物ごとの色むらも残る
+  const concrete = boxMap(pbr('concrete_wall_004', { vertexColors: true, roughness: 1 }), 0.22)
+  const rockMat = boxMap(pbr('rock_face', { vertexColors: true }), 0.12)
+  const asphaltMat = boxMap(pbr('asphalt_02', { roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), 0.16)
+  const dirtMat = boxMap(pbr('dirt', { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), 0.18)
+  const woodMat = boxMap(new THREE.MeshStandardMaterial({ map: plankTexture(), vertexColors: true, roughness: 0.8 }), 0.3)
+  const metal = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.85 })
+  const fac = facadeTextures()
+  const buildingMat = boxMap(new THREE.MeshStandardMaterial({ vertexColors: true, map: fac.map, roughnessMap: fac.rough, metalness: 0.0, roughness: 1 }), 1 / 9)
 
   // ---------------------------------------- 地形
+  // 林の濃さ（木の配置と地面の落ち葉の両方に使う）
+  const forestDensity = (x, z) => {
+    const n = Math.sin(x * 0.021 + 1.3) * Math.cos(z * 0.017) + Math.sin(x * 0.051 - z * 0.033) * 0.6 + Math.sin((x + z) * 0.009) * 0.5
+    return Math.max(0, Math.min(1, (n + 0.55) / 1.4))
+  }
   {
     const X0 = BOUNDS.x0 - 90, X1 = BOUNDS.x1 + 90, Z0 = BOUNDS.z0 - 90, Z1 = BOUNDS.z1 + 90
     const S = 4
@@ -26,156 +40,163 @@ export function buildScene(scene, world) {
     g.rotateX(-Math.PI / 2)
     g.translate((X0 + X1) / 2, 0, (Z0 + Z1) / 2)
     const p = g.attributes.position
-    const cols = new Float32Array(p.count * 3)
-    const c = new THREE.Color(), c2 = new THREE.Color()
+    const splat = new Float32Array(p.count * 4), soil = new Float32Array(p.count)
+    const sst = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t) }
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), z = p.getZ(i)
       const h = terrain(x, z)
       p.setY(i, h)
       const hx = terrain(x + 2, z) - terrain(x - 2, z), hz = terrain(x, z + 2) - terrain(x, z - 2)
       const slope = Math.hypot(hx, hz) / 4
-      const inCanyon = x > CANYON.x0 - 8 && x < CANYON.x1 + 8 && z > CANYON.z0 - 8 && z < CANYON.z1 + 8 && h < -3
-      if (z < 626 && x > BOUNDS.x0 && x < BOUNDS.x1 && h < 2) c.set(z < 346 ? PAL.city : 0x9b9585)
-      else if (inCanyon) c.set(PAL.rock).lerp(c2.set(PAL.rockDark), Math.min(1, -h / 70))
-      else if (slope > 0.9) c.set(PAL.rock)
-      else {
-        c.set(PAL.grass).lerp(c2.set(PAL.grass2), (Math.sin(x * 0.05) * Math.cos(z * 0.04) + 1) / 2)
-        if (h > 30) c.lerp(c2.set(0x9aa29a), Math.min(1, (h - 30) / 40))
-      }
-      // 地面の小さな揺らぎ
-      const n = (Math.sin(x * 1.7 + z * 0.3) * Math.sin(z * 1.3 - x * 0.2)) * 0.04
-      cols[i * 3] = c.r + n; cols[i * 3 + 1] = c.g + n; cols[i * 3 + 2] = c.b + n
+      const inside = x > BOUNDS.x0 && x < BOUNDS.x1
+      let gr = 1, di = 0, ro = 0, ci = 0
+      if (z < 626 && inside && h < 2) { ci = z < 346 ? 1 : 0.35; gr = 0; if (z >= 346) soil[i] = 0.75 }
+      ro = Math.max(ro, sst(0.5, 0.95, slope))
+      if (h < -3) ro = 1
+      if (!inside || z < BOUNDS.z0 || z > BOUNDS.z1) ro = Math.max(ro, sst(8, 40, h) * 0.8)
+      di = Math.max(0, forestDensity(x, z) - 0.35) * 1.2 * (1 - ro)
+      gr = Math.max(0, 1 - ro - di - ci)
+      splat.set([gr, di, ro, ci], i * 4)
     }
     for (const d of world.dirt) for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), z = p.getZ(i)
-      if (x >= d.x0 && x <= d.x1 && z >= d.z0 && z <= d.z1) { c.set(PAL.dirt); cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b }
+      if (x >= d.x0 - 2 && x <= d.x1 + 2 && z >= d.z0 - 2 && z <= d.z1 + 2) soil[i] = 1
     }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3))
+    g.setAttribute('splat', new THREE.BufferAttribute(splat, 4))
+    g.setAttribute('soil', new THREE.BufferAttribute(soil, 1))
     g.computeVertexNormals()
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }))
+    const m = new THREE.Mesh(g, terrainMaterial())
     m.receiveShadow = true
     root.add(m)
   }
 
-  // ---------------------------------------- 道路（地形に沿う帯）
+  // ---------------------------------------- 道路（地形に沿う帯）＋ 白線・黄線・路肩
   {
-    const b = new Builder()
-    const lines = new Builder()
+    const pave = new Builder(), soilB = new Builder(), lines = new Builder()
     const hAt = (x, z) => terrain(x, z)
     let lift = 0.06
-    for (const r of world.roads) {
-      lift += 0.004
-      const col = r.surf === 'dirt' ? PAL.dirtRoad : PAL.asphalt
-      const pts = r.pts
-      for (let i = 0; i < pts.length - 1; i++) {
-        const [ax, az] = pts[i], [bx, bz] = pts[i + 1]
-        const L = Math.hypot(bx - ax, bz - az)
-        const n = Math.max(1, Math.ceil(L / 4))
-        const dx = (bx - ax) / L, dz = (bz - az) / L
-        const px = -dz * r.w / 2, pz = dx * r.w / 2
-        // 角は少しはみ出させて継ぎ目を隠す
-        const ext = r.w / 2
-        for (let k = 0; k < n; k++) {
-          const t0 = k / n, t1 = (k + 1) / n
-          const x0 = ax + (bx - ax) * t0 - (k === 0 ? dx * ext : 0), z0 = az + (bz - az) * t0 - (k === 0 ? dz * ext : 0)
-          const x1 = ax + (bx - ax) * t1 + (k === n - 1 ? dx * ext : 0), z1 = az + (bz - az) * t1 + (k === n - 1 ? dz * ext : 0)
-          const q = (x, z) => [x, hAt(x, z) + lift, z]
-          const A = q(x0 + px, z0 + pz), B = q(x0 - px, z0 - pz), C = q(x1 - px, z1 - pz), D = q(x1 + px, z1 + pz)
-          // 谷の上（地形がずっと下）には帯を描かない
-          if (A[1] < -3 || B[1] < -3 || C[1] < -3 || D[1] < -3) continue
-          b.tri(A, B, C, col); b.tri(A, C, D, col)
-          // 中央の破線（舗装路だけ）
-          if (r.surf === 'road' && r.w >= 12 && k % 2 === 0) {
-            const lw = 0.18
-            const lx = -dz * lw, lz = dx * lw
-            const mx0 = (x0 + x1) / 2 - dx * 1.2, mz0 = (z0 + z1) / 2 - dz * 1.2
-            const mx1 = (x0 + x1) / 2 + dx * 1.2, mz1 = (z0 + z1) / 2 + dz * 1.2
-            const e = 0.02
-            const a2 = [mx0 + lx, hAt(mx0, mz0) + lift + e, mz0 + lz], b2 = [mx0 - lx, hAt(mx0, mz0) + lift + e, mz0 - lz]
-            const c2 = [mx1 - lx, hAt(mx1, mz1) + lift + e, mz1 - lz], d2 = [mx1 + lx, hAt(mx1, mz1) + lift + e, mz1 + lz]
-            lines.tri(a2, b2, c2, PAL.line); lines.tri(a2, c2, d2, PAL.line)
-          }
-        }
+    const WHITE = 0xf2f0e8, YELLOW = 0xf0b419
+    // 帯を1本足す（off は中心線からの横のずれ、hw は半幅）
+    const strip = (b, ax, az, bx, bz, off, hw, y, col, dash = 0, k0 = 0) => {
+      const L = Math.hypot(bx - ax, bz - az)
+      const dx = (bx - ax) / L, dz = (bz - az) / L
+      const px = -dz, pz = dx
+      const n = Math.max(1, Math.ceil(L / 3))
+      for (let k = 0; k < n; k++) {
+        if (dash && ((k + k0) % 4) >= 2) continue
+        const t0 = k / n, t1 = (k + 1) / n
+        const x0 = ax + (bx - ax) * t0 + px * off, z0 = az + (bz - az) * t0 + pz * off
+        const x1 = ax + (bx - ax) * t1 + px * off, z1 = az + (bz - az) * t1 + pz * off
+        const q = (x, z) => [x, hAt(x, z) + y, z]
+        const A = q(x0 + px * hw, z0 + pz * hw), B = q(x0 - px * hw, z0 - pz * hw), C = q(x1 - px * hw, z1 - pz * hw), D = q(x1 + px * hw, z1 + pz * hw)
+        if (A[1] < -3 || B[1] < -3 || C[1] < -3 || D[1] < -3) continue
+        b.tri(A, C, B, col); b.tri(A, D, C, col)
       }
     }
-    const rm = new THREE.Mesh(b.geometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }))
-    rm.receiveShadow = true
-    root.add(rm)
-    root.add(new THREE.Mesh(lines.geometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 })))
+    for (const r of world.roads) {
+      lift += 0.004
+      const city = r.pts.every(([, z]) => z < 626)
+      for (let i = 0; i < r.pts.length - 1; i++) {
+        const [ax0, az0] = r.pts[i], [bx0, bz0] = r.pts[i + 1]
+        const L = Math.hypot(bx0 - ax0, bz0 - az0)
+        const dx = (bx0 - ax0) / L, dz = (bz0 - az0) / L
+        // 角の継ぎ目を隠すため、舗装は両端を半幅ぶん延ばす
+        const e = r.w / 2
+        const ax = ax0 - dx * e, az = az0 - dz * e, bx = bx0 + dx * e, bz = bz0 + dz * e
+        if (r.surf === 'dirt') { strip(soilB, ax, az, bx, bz, 0, r.w / 2, lift, 0xffffff); continue }
+        strip(pave, ax, az, bx, bz, 0, r.w / 2, lift, 0xffffff)
+        if (r.w < 8) continue
+        // 白線（端）は角で途切れさせる。センターは市街なら白の破線、山なら黄色の実線（追い越し禁止）
+        const lx0 = ax0 + dx * e * 0.9, lz0 = az0 + dz * e * 0.9, lx1 = bx0 - dx * e * 0.9, lz1 = bz0 - dz * e * 0.9
+        if (Math.hypot(lx1 - lx0, lz1 - lz0) < 2 || (lx1 - lx0) * dx + (lz1 - lz0) * dz < 0) continue
+        for (const sgn of [-1, 1]) strip(lines, lx0, lz0, lx1, lz1, sgn * (r.w / 2 - 0.55), 0.09, lift + 0.015, WHITE)
+        if (city) strip(lines, lx0, lz0, lx1, lz1, 0, 0.08, lift + 0.015, WHITE, 1, i)
+        else for (const sgn of [-1, 1]) strip(lines, lx0, lz0, lx1, lz1, sgn * 0.16, 0.07, lift + 0.015, YELLOW)
+      }
+    }
+    const rm = new THREE.Mesh(pave.geometry(), asphaltMat); rm.receiveShadow = true; root.add(rm)
+    const dm = new THREE.Mesh(soilB.geometry(), dirtMat); dm.receiveShadow = true; root.add(dm)
+    const lm = new THREE.Mesh(lines.geometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5 }))
+    lm.receiveShadow = true
+    root.add(lm)
   }
 
   // ---------------------------------------- 板（橋・高架・ジャンプ台）
   const plankMeshes = []
   {
-    const b = new Builder()
+    const sides = new Builder(), tops = new Builder(), soilTop = new Builder(), wood = new Builder(), lines = new Builder()
     for (const sl of world.slabs) {
       if (sl.needs) continue // 倒れた鉄塔そのものが板になる
-      const top = sl.surf === 'wood' ? 0xc49a5c : sl.surf === 'dirt' ? PAL.dirt : PAL.asphalt
-      const side = sl.surf === 'wood' ? 0x9c7342 : sl.surf === 'dirt' ? 0x7d6143 : PAL.concrete
       const P = (u, v, y) => { const w = toWorld(sl, u, v); return [w.x, y, w.z] }
       const t0 = sl.y0, t1 = sl.y1, th = sl.thick
-      b.hexa([
+      const corners = [
         P(-sl.hw, -sl.hl, t0 - th), P(sl.hw, -sl.hl, t0 - th), P(sl.hw, sl.hl, t1 - th), P(-sl.hw, sl.hl, t1 - th),
         P(-sl.hw, -sl.hl, t0), P(sl.hw, -sl.hl, t0), P(sl.hw, sl.hl, t1), P(-sl.hw, sl.hl, t1)
-      ], side, { top })
-      // 舗装の板には白線
-      if (sl.surf === 'road' && sl.hw >= 5) for (const su of [-sl.hw + 0.5, sl.hw - 0.5]) {
+      ]
+      if (sl.surf === 'wood') { wood.hexa(corners, 0xffffff); continue }
+      sides.hexa(corners, sl.surf === 'dirt' ? 0x9a8068 : 0xdedbd4, { noTop: true })
+      const topOnly = sl.surf === 'dirt' ? soilTop : tops
+      topOnly.hexa(corners, 0xffffff, { noBottom: true, shade: false })
+      if (sl.surf === 'road' && sl.hw >= 5) for (const su of [-sl.hw + 0.55, sl.hw - 0.55]) {
         const a = toWorld(sl, su, -sl.hl), c = toWorld(sl, su, sl.hl)
-        b.box((a.x + c.x) / 2, (t0 + t1) / 2 + 0.02, (a.z + c.z) / 2, 0.12, 0.02, sl.hl, PAL.line, sl.yaw)
-      }
-      if (sl.kind === 'kicker') { // 黄黒の縁
-        const e = toWorld(sl, 0, sl.hl - 0.3)
-        b.box(e.x, t1 - 0.05, e.z, sl.hw, 0.1, 0.3, 0xf2c230, sl.yaw)
+        lines.box((a.x + c.x) / 2, (t0 + t1) / 2 + 0.02, (a.z + c.z) / 2, 0.09, 0.02, sl.hl, 0xf2f0e8, sl.yaw)
       }
       if (sl.kind === 'mound') for (let i = 0; i < 18; i++) {
         const u = (Math.sin(i * 7.1) * 0.9) * sl.hw, v = (Math.cos(i * 3.3) * 0.9) * sl.hl
         const w = toWorld(sl, u, v)
-        b.box(w.x, slabTop(sl, v) + 0.2, w.z, 0.6 + (i % 3) * 0.3, 0.35, 0.5, 0x8a6a48, i)
+        sides.box(w.x, slabTop(sl, v) + 0.2, w.z, 0.6 + (i % 3) * 0.3, 0.35, 0.5, 0x8a6a48, i)
       }
     }
-    const m = new THREE.Mesh(b.geometry(), vc)
-    m.castShadow = true; m.receiveShadow = true
-    root.add(m)
+    // ジャンプ台の黄黒の縁
+    for (const sl of world.slabs) if (sl.kind === 'kicker') {
+      const e = toWorld(sl, 0, sl.hl - 0.3)
+      lines.box(e.x, sl.y1 - 0.02, e.z, sl.hw, 0.08, 0.3, 0xf2c230, sl.yaw)
+    }
+    for (const [b, mat] of [[sides, concrete], [tops, asphaltMat], [soilTop, dirtMat], [wood, woodMat], [lines, vc]]) {
+      if (b.empty) continue
+      const m = new THREE.Mesh(b.geometry(), mat)
+      m.castShadow = true; m.receiveShadow = true
+      root.add(m)
+    }
   }
 
   // ---------------------------------------- 壊れない箱（建物・壁・柵）
   {
-    const bld = new Builder(), other = new Builder()
+    const bld = new Builder(), conc = new Builder(), rock = new Builder(), met = new Builder(), other = new Builder()
     let k = 0
     for (const o of world.colliders) {
       if (o.slab || o.kind === 'bound' || o.kind === 'pylon') continue
       const cy = o.y0 + o.h / 2
       if (o.kind === 'building') {
         const color = BUILD_COLORS[(k++ * 5) % BUILD_COLORS.length]
-        bld.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, color, o.yaw, { top: 0x7c7f86, uvScale: 4.5 })
-        // 屋上の箱
-        other.box(o.cx + o.hw * 0.3, o.y0 + o.h + 0.8, o.cz - o.hl * 0.2, Math.min(3, o.hw * 0.3), 0.8, Math.min(2.5, o.hl * 0.25), 0x9a9da3, 0)
-      } else if (o.kind === 'whouse') other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0x7d8b99, o.yaw, { top: 0x5d6873 })
+        bld.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, color, o.yaw, { noTop: true, shade: false })
+        // 屋上（コンクリート）と塔屋・室外機
+        conc.box(o.cx, o.y0 + o.h + 0.15, o.cz, o.hw + 0.25, 0.3, o.hl + 0.25, 0xbab6ae, o.yaw)
+        conc.box(o.cx + o.hw * 0.3, o.y0 + o.h + 1.4, o.cz - o.hl * 0.2, Math.min(3, o.hw * 0.3), 1.2, Math.min(2.5, o.hl * 0.25), 0xcfcac2, 0)
+        for (let j = 0; j < 3; j++) met.box(o.cx - o.hw * 0.4 + j * 1.6, o.y0 + o.h + 0.75, o.cz + o.hl * 0.4, 0.6, 0.45, 0.6, 0xb8bcc2, 0)
+      } else if (o.kind === 'whouse') conc.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0x9aa6b2, o.yaw)
       else if (o.kind === 'rail') {
-        // ガードレール: 支柱と横板
+        // ガードレール: 波形の横板と支柱
         const len = Math.max(o.hw, o.hl)
         const along = o.hl > o.hw
-        other.box(o.cx, o.y0 + o.h * 0.75, o.cz, o.hw, 0.18, o.hl, PAL.metal, o.yaw)
-        for (let t = -len; t <= len; t += 4) {
-          other.box(o.cx + (along ? 0 : t), o.y0 + o.h * 0.4, o.cz + (along ? t : 0), 0.08, o.h * 0.4, 0.08, 0x8b9099, 0)
-        }
-      } else if (o.kind === 'pillar') other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, PAL.concrete, o.yaw)
+        met.box(o.cx, o.y0 + o.h * 0.72, o.cz, along ? 0.06 : o.hw, 0.17, along ? o.hl : 0.06, 0xd7dbe0, o.yaw)
+        for (let t = -len; t <= len; t += 2) met.box(o.cx + (along ? 0 : t), o.y0 + o.h * 0.4, o.cz + (along ? t : 0), 0.06, o.h * 0.4, 0.06, 0x9aa0a8, 0)
+      } else if (o.kind === 'pillar' || o.kind === 'sidewall' || o.kind === 'wall') conc.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0xe0ddd6, o.yaw)
       else if (o.kind === 'container') {
-        const cc = [0xc0392b, 0x2a6fb0, 0x2e8b57, 0xd4882b][k++ % 4]
-        other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, cc, o.yaw)
-        for (let t = -o.hl + 0.5; t < o.hl; t += 1) other.box(o.cx + o.hw + 0.02, cy, o.cz + t, 0.03, o.h / 2 - 0.1, 0.12, cc, 0, { shade: false })
+        const cc = [0xa8352a, 0x2a5f98, 0x2e7a50, 0xc07a2b][k++ % 4]
+        met.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, cc, o.yaw)
+        for (let t = -o.hl + 0.5; t < o.hl; t += 0.6) met.box(o.cx + o.hw + 0.02, cy, o.cz + t, 0.03, o.h / 2 - 0.1, 0.1, cc, 0, { shade: false })
       } else if (o.kind === 'rock') {
-        other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0x7f746a, o.yaw)
-        other.box(o.cx + 0.4, o.y0 + o.h * 0.9, o.cz - 0.3, o.hw * 0.6, o.h * 0.25, o.hl * 0.6, 0x8d8378, o.yaw + 0.5)
-      } else if (o.kind === 'sidewall') other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0xa9a59c, o.yaw)
-      else other.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0xa3a09a, o.yaw)
+        rock.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0xd8d0c8, o.yaw)
+        rock.box(o.cx + 0.4, o.y0 + o.h * 0.9, o.cz - 0.3, o.hw * 0.6, o.h * 0.25, o.hl * 0.6, 0xe4dcd2, o.yaw + 0.5)
+      } else conc.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, 0xd0ccc4, o.yaw)
     }
-    const bm = new THREE.Mesh(bld.geometry(), buildingMat)
-    bm.castShadow = true; bm.receiveShadow = true
-    root.add(bm)
-    const om = new THREE.Mesh(other.geometry(), vc)
-    om.castShadow = true; om.receiveShadow = true
-    root.add(om)
+    for (const [b, mat] of [[bld, buildingMat], [conc, concrete], [rock, rockMat], [met, metal], [other, vc]]) {
+      if (b.empty) continue
+      const m = new THREE.Mesh(b.geometry(), mat)
+      m.castShadow = true; m.receiveShadow = true
+      root.add(m)
+    }
   }
 
   // ---------------------------------------- 崩れた橋の主塔・ケーブル・垂れ下がった残骸（見た目だけ）
@@ -229,46 +250,64 @@ export function buildScene(scene, world) {
     root.add(m)
   }
 
-  // ---------------------------------------- 木・残骸
+  // ---------------------------------------- 杉林・残骸
   {
-    const trunk = new Builder(), leaf = new Builder()
-    const isClear = (x, z) => {
-      if (world.surfaceAt(x, z) !== 'grass') return false
-      for (const o of world.nearby(x, z)) if (Math.abs(x - o.cx) < o.hw + 3 && Math.abs(z - o.cz) < o.hl + 3) return false
-      const h = terrain(x, z)
-      return h > -2
+    const spots = []
+    let seed = 11
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+    const clearOf = (x, z) => {
+      for (const sg of world.roadGrid.at(x, z)) {
+        const dx = sg.bx - sg.ax, dz = sg.bz - sg.az, L = dx * dx + dz * dz
+        let t = L ? ((x - sg.ax) * dx + (z - sg.az) * dz) / L : 0
+        t = Math.max(0, Math.min(1, t))
+        if (Math.hypot(x - (sg.ax + dx * t), z - (sg.az + dz * t)) < sg.hw + 3.5) return false
+      }
+      for (const o of world.nearby(x, z)) {
+        const c = Math.cos(o.yaw || 0), sn = Math.sin(o.yaw || 0), ddx = x - o.cx, ddz = z - o.cz
+        if (Math.abs(ddx * c - ddz * sn) < o.hw + 3 && Math.abs(ddx * sn + ddz * c) < o.hl + 3) return false
+      }
+      for (const r of world.repair) if (x > r.x0 - 4 && x < r.x1 + 4 && z > r.z0 - 4 && z < r.z1 + 4) return false
+      return true
     }
-    for (const d of world.decor) {
-      if (d.kind === 'tree') {
-        if (!isClear(d.x, d.z)) continue
-        // 道から少し離す
-        let near = false
-        for (const s of world.segs) { const dd = Math.hypot(d.x - (s.ax + s.bx) / 2, d.z - (s.az + s.bz) / 2); if (dd < 2) { near = true; break } }
-        if (near) continue
-        const h = terrain(d.x, d.z), s = d.s
-        trunk.box(d.x, h + 1.2 * s, d.z, 0.25 * s, 1.2 * s, 0.25 * s, 0x6b4a2f)
-        leaf.box(d.x, h + 3.4 * s, d.z, 1.6 * s, 1.3 * s, 1.6 * s, 0x3f7a3a, d.x)
-        leaf.box(d.x, h + 4.9 * s, d.z, 1.05 * s, 0.9 * s, 1.05 * s, 0x4d8c43, d.x + 1)
-      } else if (d.kind === 'debris') {
-        for (let i = 0; i < 6; i++) trunk.box(d.x + Math.sin(i * 2) * d.s, d.y + (i % 3), d.z + Math.cos(i * 3) * d.s, 2 + i % 2, 0.8, 3, PAL.concrete, i)
+    const SP = 7
+    for (let z = BOUNDS.z0 - 80; z < BOUNDS.z1 + 80; z += SP) for (let x = BOUNDS.x0 - 80; x < BOUNDS.x1 + 80; x += SP) {
+      const px = x + (rnd() - 0.5) * SP * 0.9, pz = z + (rnd() - 0.5) * SP * 0.9
+      const inPlay = px > BOUNDS.x0 && px < BOUNDS.x1 && pz > BOUNDS.z0 && pz < BOUNDS.z1
+      // 市街と工業地帯（塀の内側）には植えない
+      if (inPlay && pz < 626 && px > -128 && px < 112) continue
+      const h = terrain(px, pz)
+      if (h < -2.5) continue
+      const dens = inPlay ? forestDensity(px, pz) : 0.75
+      if (rnd() > dens * 0.95) continue
+      if (!clearOf(px, pz)) continue
+      const gnd = world.groundAt(px, pz, h + 1).h
+      if (gnd > h + 0.5) continue // 橋や高架の上には生やさない
+      spots.push({ x: px, y: h, z: pz, s: 0.75 + rnd() * 0.65, r: rnd() * 6.28 })
+    }
+    buildForest(root, spots)
+    // 道の脇 3〜25m に草むら
+    const tufts = []
+    for (const sg of world.segs) {
+      if (Math.min(sg.az, sg.bz) < 626 && Math.max(sg.az, sg.bz) < 626) continue
+      const L = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az)
+      for (let d = 0; d < L; d += 1.6) {
+        for (const side of [-1, 1]) {
+          if (rnd() < 0.35) continue
+          const off = sg.hw + 1.5 + Math.pow(rnd(), 1.6) * 22
+          const tx = sg.ax + (sg.bx - sg.ax) * d / L + (-(sg.bz - sg.az) / L) * off * side + (rnd() - 0.5) * 2
+          const tz = sg.az + (sg.bz - sg.az) * d / L + ((sg.bx - sg.ax) / L) * off * side + (rnd() - 0.5) * 2
+          const h = terrain(tx, tz)
+          if (h < -2.5 || world.surfaceAt(tx, tz) !== 'grass' || !clearOf(tx, tz)) continue
+          tufts.push({ x: tx, y: h, z: tz, s: 0.45 + rnd() * 0.6, r: rnd() * 6.28 })
+        }
       }
     }
-    for (const [m] of [[new THREE.Mesh(trunk.geometry(), vc)], [new THREE.Mesh(leaf.geometry(), vc)]]) { m.castShadow = true; m.receiveShadow = true; root.add(m) }
-  }
-
-  // ---------------------------------------- 遠景の山（外周より外）
-  {
-    const b = new Builder()
-    for (let i = 0; i < 40; i++) {
-      const a = i / 40 * Math.PI * 2
-      const r = 1100 + (i % 5) * 60
-      const cx = -35 + Math.cos(a) * r * 0.55, cz = 580 + Math.sin(a) * r
-      const h = 110 + (i * 37 % 7) * 25
-      const w = 140 + (i % 3) * 40
-      b.tri([cx - w, -5, cz], [cx + w, -5, cz], [cx, h, cz + 10], 0x6a7d8c)
-      b.tri([cx + w, -5, cz], [cx - w, -5, cz], [cx, h, cz + 10], 0x5b6d7b)
+    buildTufts(root, tufts)
+    const trunk = new Builder()
+    for (const d of world.decor) if (d.kind === 'debris') {
+      for (let i = 0; i < 6; i++) trunk.box(d.x + Math.sin(i * 2) * d.s, d.y + (i % 3), d.z + Math.cos(i * 3) * d.s, 2 + i % 2, 0.8, 3, 0xd0ccc4, i)
     }
-    root.add(new THREE.Mesh(b.geometry(), new THREE.MeshBasicMaterial({ vertexColors: true, fog: true })))
+    if (!trunk.empty) { const m = new THREE.Mesh(trunk.geometry(), concrete); m.castShadow = true; root.add(m) }
   }
 
   // ---------------------------------------- チェックポイントの門
@@ -416,4 +455,57 @@ export function propGeometry(type) {
     }
   }
   return b.geometry()
+}
+
+// 板の木目
+function plankTexture() {
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = 256
+  const g = cv.getContext('2d')
+  for (let i = 0; i < 8; i++) {
+    const v = 150 + (i * 37) % 50
+    g.fillStyle = `rgb(${v},${(v * 0.72) | 0},${(v * 0.45) | 0})`
+    g.fillRect(0, i * 32, 256, 31)
+    g.strokeStyle = 'rgba(60,35,15,0.25)'
+    for (let k = 0; k < 6; k++) { g.beginPath(); g.moveTo(0, i * 32 + 4 + k * 5); g.bezierCurveTo(80, i * 32 + k * 5, 170, i * 32 + 9 + k * 5, 256, i * 32 + 3 + k * 5); g.stroke() }
+  }
+  const t = new THREE.CanvasTexture(cv)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
+
+// ビルの外壁（9m 四方 = 3階 x 窓3つ）。窓ガラスは粗さを低くして空を映す
+function facadeTextures() {
+  const S = 512
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = S; return [c, c.getContext('2d')] }
+  const [cv, g] = mk(), [cr, gr] = mk()
+  let seed = 5
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+  g.fillStyle = '#d9d6cf'; g.fillRect(0, 0, S, S)
+  // 壁のむら
+  for (let i = 0; i < 1800; i++) { const v = 190 + rnd() * 50; g.fillStyle = `rgba(${v},${v},${v - 6},0.25)`; g.fillRect(rnd() * S, rnd() * S, 2 + rnd() * 6, 2 + rnd() * 6) }
+  gr.fillStyle = 'rgb(225,225,225)'; gr.fillRect(0, 0, S, S)
+  const fl = S / 3, wn = S / 3
+  for (let fy = 0; fy < 3; fy++) {
+    // 階の帯
+    g.fillStyle = 'rgba(120,118,112,0.55)'; g.fillRect(0, fy * fl + fl - 10, S, 7)
+    for (let wx = 0; wx < 3; wx++) {
+      const x = wx * wn + 18, y = fy * fl + 26, w = wn - 36, h = fl - 60
+      // 枠
+      g.fillStyle = '#5d6168'; g.fillRect(x - 5, y - 5, w + 10, h + 10)
+      // ガラス（上が明るい空、下が暗い）
+      const grd = g.createLinearGradient(0, y, 0, y + h)
+      const lit = rnd() < 0.12
+      grd.addColorStop(0, lit ? '#d9c79a' : '#5f7387'); grd.addColorStop(1, lit ? '#a78e5c' : '#1f2833')
+      g.fillStyle = grd; g.fillRect(x, y, w, h)
+      if (!lit && rnd() < 0.4) { g.fillStyle = 'rgba(230,225,210,0.55)'; g.fillRect(x, y, w * (0.3 + rnd() * 0.5), h) } // カーテン
+      g.fillStyle = '#5d6168'; g.fillRect(x + w / 2 - 2, y, 4, h); g.fillRect(x, y + h * 0.35, w, 3)
+      gr.fillStyle = 'rgb(28,28,28)'; gr.fillRect(x, y, w, h)
+    }
+  }
+  const map = new THREE.CanvasTexture(cv), rough = new THREE.CanvasTexture(cr)
+  for (const t of [map, rough]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8 }
+  map.colorSpace = THREE.SRGBColorSpace
+  return { map, rough }
 }

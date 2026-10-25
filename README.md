@@ -135,6 +135,14 @@ npm start          # http://localhost:8080
 
 サーバーはデータベースを使わず、部屋はメモリにだけある（再起動で消える）。8人の部屋で、サーバーからの送信はおよそ1人あたり毎秒20回×8台分。
 
+## 素材
+
+- 空（HDRI）・アスファルト・草地・落ち葉・岩肌・土・コンクリート・杉の樹皮・外壁: [Poly Haven](https://polyhaven.com)（CC0。出典表示は不要だが記録として残す）。取得は `sh tools/fetch-assets.sh`
+- 車・杉の樹冠・草むら・建物の窓・看板・壊せる物: コードで作成（`public/js/carmodel.js` `trees.js` `scene.js`）
+- three.js 本体と後処理（光のにじみ・HDR 読み込み）: MIT（`public/vendor/`）
+
+初回の読み込みは約12MB（空の画像5MB＋テクスチャ）。
+
 ## 検証
 
 ```sh

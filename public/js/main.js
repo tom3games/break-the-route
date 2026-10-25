@@ -14,6 +14,7 @@ import { Input } from './input.js'
 import { t, applyI18n, setLang, getLang, placeText } from './i18n.js'
 import { loadProfile, saveProfile, buyUpgrade, sellUpgrade } from './save.js'
 import { HUD, drawFullMap } from './hud.js'
+import { loadSky, makeComposer, setAniso } from './look.js'
 import { Online } from './online.js'
 
 const $ = id => document.getElementById(id)
@@ -24,29 +25,17 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75))
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.05
+renderer.toneMappingExposure = 1.0
+setAniso(renderer)
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 $('view').appendChild(renderer.domElement)
 
 const scene = new THREE.Scene()
-const SKY_TOP = new THREE.Color(0x4f86c6), SKY_HOR = new THREE.Color(0xf3d2a2)
-scene.fog = new THREE.Fog(0xd9c7a8, 160, 760)
-{
-  // 空: 上が青、地平線が夕方の色のグラデーション
-  const g = new THREE.SphereGeometry(1800, 24, 12)
-  const m = new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { top: { value: SKY_TOP }, hor: { value: SKY_HOR } },
-    vertexShader: 'varying vec3 vP;\nvoid main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-    fragmentShader: 'uniform vec3 top; uniform vec3 hor; varying vec3 vP;\nvoid main(){ float h = clamp(vP.y*1.6+0.05,0.0,1.0); vec3 c = mix(hor, top, pow(h,0.7)); gl_FragColor = vec4(c,1.0); }'
-  })
-  const sky = new THREE.Mesh(g, m)
-  sky.renderOrder = -1
-  scene.add(sky)
-  scene.userData.sky = sky
-}
-const sun = new THREE.DirectionalLight(0xffe2b8, 2.6)
+// 霞（遠くが空の色に溶ける）。色は空の地平線付近に合わせる
+scene.fog = new THREE.FogExp2(0xc9d6e2, 0.0016)
+const sun = new THREE.DirectionalLight(0xfff1dc, 3.2)
+sun.userData.dir = new THREE.Vector3(-0.45, 0.62, -0.64).normalize()
 sun.castShadow = true
 sun.shadow.mapSize.set(2048, 2048)
 const SH = 70
@@ -54,7 +43,19 @@ Object.assign(sun.shadow.camera, { left: -SH, right: SH, top: SH, bottom: -SH, n
 sun.shadow.normalBias = 0.04
 sun.shadow.bias = -0.0004
 scene.add(sun, sun.target)
-scene.add(new THREE.HemisphereLight(0xc4d8ff, 0x6a5a48, 1.9))
+const hemi = new THREE.HemisphereLight(0xc4d8ff, 0x6a5a48, 1.9)
+scene.add(hemi)
+// 実写の空が読めたら、空で照らし、太陽をその向きへ回す（読めないうちは単色の空と半球光）
+scene.background = new THREE.Color(0xa9c4e0)
+loadSky(renderer, scene, sun, dir => {
+  // 走る向き（北）から見て右後ろに太陽が来るよう空ごと回す
+  const want = Math.atan2(-0.85, -0.5), have = Math.atan2(dir.z, dir.x)
+  const rot = have - want
+  scene.backgroundRotation.set(0, rot, 0)
+  scene.environmentRotation.set(0, rot, 0)
+  sun.userData.dir = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), rot)
+  hemi.intensity = 0.35
+})
 const camera = new THREE.PerspectiveCamera(64, 1, 0.3, 2400)
 
 const world = createWorld()
@@ -84,9 +85,11 @@ function placeProps() {
 }
 placeProps()
 
+const post = makeComposer(renderer, scene, camera)
 function resize() {
   const w = innerWidth, h = innerHeight
   renderer.setSize(w, h, false)
+  post.composer.setSize(w, h)
   camera.aspect = w / h
   camera.updateProjectionMatrix()
   fx.setScale(h)
@@ -604,9 +607,8 @@ function frame() {
 
   // 影は車の周りだけ
   const f = follow || { x: 0, y: 0, z: 0 }
-  sun.position.set(f.x - 60, f.y + 110, f.z - 40)
+  sun.position.set(f.x, f.y, f.z).addScaledVector(sun.userData.dir, 160)
   sun.target.position.set(f.x, f.y, f.z)
-  scene.userData.sky.position.copy(camera.position)
 
   // 音
   if (me) {
@@ -625,7 +627,8 @@ function frame() {
     }
   }
 
-  renderer.render(scene, camera)
+  post.grade.uniforms.speed.value = follow && mode === 'race' ? Math.max(0, Math.min(1, (speedOf(follow) - 30) / 40)) * (follow.boosting ? 1 : 0.55) : 0
+  post.composer.render()
   if (preview && preview.model && !$('garage').classList.contains('hidden')) {
     preview.model.group.rotation.y += dt * 0.6
     preview.r.render(preview.s, preview.c)
@@ -651,6 +654,7 @@ function lerpAngle(a, b, k) {
 // ---------------------------------------------------------------- カメラ
 const _v = new THREE.Vector3(), _l = new THREE.Vector3()
 function updateCamera(dt) {
+  if (window.__freeze) return // 検証用: カメラを外から置くとき
   const c = follow
   if (!c) return
   const m = models.get(c.id)
@@ -663,7 +667,7 @@ function updateCamera(dt) {
     hx = hx * (1 - k) + (c.vx / v) * k; hz = hz * (1 - k) + (c.vz / v) * k
     const l = Math.hypot(hx, hz); hx /= l; hz /= l
   }
-  const presets = [[7.2, 2.7], [11, 4.2], [0.2, 1.1]]
+  const presets = [[6.2, 2.0], [10, 3.6], [0.2, 1.1]]
   const [back0, up0] = presets[camMode]
   let back = back0 + Math.min(2.5, v * 0.035), up = up0
   // カウントダウン中は前から回り込む
@@ -700,7 +704,7 @@ function updateCamera(dt) {
   _v.set(tx, ty, tz)
   cam.pos.lerp(_v, k)
   if (camMode === 2) cam.pos.copy(_v)
-  _l.set(pos.x + hx * 5, pos.y + 1.1, pos.z + hz * 5)
+  _l.set(pos.x + hx * 6, pos.y + 1.0, pos.z + hz * 6)
   cam.look.lerp(_l, 1 - Math.exp(-dt * 12))
   camera.position.copy(cam.pos)
   // 揺れ

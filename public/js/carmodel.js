@@ -1,115 +1,246 @@
-// 車の見た目。車体は細かく割った箱で、ぶつけた場所の頂点を押し込んで凹ませる。
-// 損傷が進むとバンパー・ボンネット・ウイングが外れて飛び、エンジンから煙が出る。
+// 車の見た目（実在の車種ではない架空のクーペ）。断面を前後につないだ曲面の車体に、
+// クリア塗装の材質で空を映す。ぶつけた場所の頂点を押し込んで凹ませ、損傷で部品が外れる。
 import * as THREE from 'three'
-import { Builder } from './geo.js'
 
+// 車種ごとの寸法（m）。W=半幅, L=半長, H=屋根の高さ（車の原点から）, hood=ボンネットの高さ
 const SHAPES = {
-  runner:  { w: 1.0, len: 2.15, h: 0.62, cab: 0.5, cabLen: 1.0, cabBack: -0.35, wing: true, bar: false },
-  bruiser: { w: 1.1, len: 2.3, h: 0.78, cab: 0.58, cabLen: 1.15, cabBack: -0.2, wing: false, bar: true },
-  dart:    { w: 0.95, len: 2.05, h: 0.5, cab: 0.42, cabLen: 0.9, cabBack: -0.4, wing: true, bar: false }
+  runner:  { W: 0.98, L: 2.2, H: 0.86, hood: 0.38, cabF: 0.55, cabR: -0.95, track: 0.82, wing: true, bar: false, haunch: 1.04 },
+  bruiser: { W: 1.06, L: 2.3, H: 1.04, hood: 0.5, cabF: 0.65, cabR: -1.15, track: 0.9, wing: false, bar: true, haunch: 1.03 },
+  dart:    { W: 0.94, L: 2.1, H: 0.76, hood: 0.32, cabF: 0.45, cabR: -0.85, track: 0.79, wing: true, bar: false, haunch: 1.07 }
 }
 
-function bodyGeometry(S, paint) {
-  // 下半分（細かく割る）
-  const g1 = new THREE.BoxGeometry(S.w * 2, S.h, S.len * 2, 6, 2, 14)
-  const p = g1.attributes.position
-  for (let i = 0; i < p.count; i++) {
-    let x = p.getX(i), y = p.getY(i), z = p.getZ(i)
-    // 先端を丸め、鼻先を低く
-    const fz = z / S.len
-    if (fz > 0.6 && y > 0) y -= (fz - 0.6) * S.h * 0.9
-    if (Math.abs(fz) > 0.85) x *= 0.93
-    p.setXYZ(i, x, y - 0.05, z)
+const WHEEL_R = 0.36, WHEEL_Z = 1.35
+
+// 前後方向の断面の並び（z, 半幅倍率, 上面の高さ）から、なめらかな値を取り出す
+function curve(stations, z) {
+  for (let i = 0; i < stations.length - 1; i++) {
+    const a = stations[i], b = stations[i + 1]
+    if (z >= a[0] && z <= b[0]) {
+      const t = (z - a[0]) / (b[0] - a[0]), s = t * t * (3 - 2 * t)
+      return a.map((v, k) => k === 0 ? z : v + (b[k] - v) * s)
+    }
   }
-  // 上の客室（台形）
-  const g2 = new THREE.BoxGeometry(S.w * 1.7, S.cab, S.cabLen * 2, 4, 1, 6)
-  const q = g2.attributes.position
-  for (let i = 0; i < q.count; i++) {
-    let x = q.getX(i), y = q.getY(i), z = q.getZ(i)
-    if (y > 0) { x *= 0.82; z *= 0.72 }
-    q.setXYZ(i, x, y + S.h / 2 + S.cab / 2 - 0.06, z + S.cabBack)
+  return z < stations[0][0] ? stations[0] : stations[stations.length - 1]
+}
+
+// 断面（右半分の点の列, 下から上へ）を z に沿ってつないで閉じた面を作る
+function loft(zs, section, { capFront = true, capBack = true } = {}) {
+  const ring0 = section(zs[0])
+  const n = ring0.length
+  const pos = [], idx = []
+  // 右半分 + 左半分（鏡）で1周
+  for (const z of zs) {
+    const r = section(z)
+    for (let i = 0; i < n; i++) pos.push(r[i][0], r[i][1], z)
+    for (let i = n - 2; i >= 1; i--) pos.push(-r[i][0], r[i][1], z)
   }
-  const merge = new THREE.BufferGeometry()
-  const a = g1.toNonIndexed(), b = g2.toNonIndexed()
-  const n = a.attributes.position.count + b.attributes.position.count
-  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3)
-  pos.set(a.attributes.position.array, 0); pos.set(b.attributes.position.array, a.attributes.position.count * 3)
-  const pc = new THREE.Color(paint), glass = new THREE.Color(0x1b2a3a), dark = new THREE.Color(0x202226)
-  for (let i = 0; i < n; i++) {
-    const isCab = i >= a.attributes.position.count
-    const y = pos[i * 3 + 1]
-    let c = pc
-    if (isCab) {
-      // 屋根は車体色、側面と前後はガラス
-      const ny = (i - a.attributes.position.count)
-      c = y > S.h / 2 + S.cab - 0.08 ? pc : glass
-    } else if (y < -S.h / 2 + 0.05) c = dark
-    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b
+  const per = n + (n - 2)
+  for (let k = 0; k < zs.length - 1; k++) for (let i = 0; i < per; i++) {
+    const a = k * per + i, b = k * per + (i + 1) % per, c = (k + 1) * per + i, d = (k + 1) * per + (i + 1) % per
+    idx.push(a, c, b, b, c, d)
   }
-  merge.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  merge.setAttribute('color', new THREE.BufferAttribute(col, 3))
-  merge.computeVertexNormals()
-  return merge
+  const cap = (k, flip) => {
+    const center = pos.length / 3
+    let cx = 0, cy = 0
+    for (let i = 0; i < per; i++) { cy += pos[(k * per + i) * 3 + 1] }
+    pos.push(cx, cy / per, zs[k])
+    for (let i = 0; i < per; i++) {
+      const a = k * per + i, b = k * per + (i + 1) % per
+      if (flip) idx.push(center, b, a); else idx.push(center, a, b)
+    }
+  }
+  if (capBack) cap(0, false)
+  if (capFront) cap(zs.length - 1, true)
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setIndex(idx)
+  g.computeVertexNormals()
+  return g
+}
+
+const range = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => a + (b - a) * i / n)
+
+function bodyGeometry(S) {
+  const W = S.W, L = S.L
+  // [z, 半幅, 上面の高さ, 下端の高さ]
+  const st = [
+    [-L, 0.86, S.hood - 0.06, -0.24],
+    [-L + 0.12, 0.95, S.hood + 0.02, -0.33],
+    [-WHEEL_Z, S.haunch, S.hood + 0.04, -0.36],      // 後ろのフェンダーの張り出し
+    [S.cabR, 0.99, S.hood + 0.05, -0.38],
+    [S.cabF, 0.97, S.hood + 0.03, -0.38],
+    [WHEEL_Z, 0.99, S.hood - 0.02, -0.36],
+    [L - 0.3, 0.93, S.hood - 0.16, -0.32],
+    [L, 0.78, S.hood - 0.3, -0.2]
+  ]
+  const section = z => {
+    let [, w, top, bot] = curve(st, z)
+    // 車輪の上は弧を描いて切り欠く（タイヤが見えるように）
+    for (const zc of [WHEEL_Z, -WHEEL_Z]) {
+      const d = Math.abs(z - zc), RA = 0.47
+      if (d < RA) bot = Math.max(bot, -0.19 + Math.sqrt(RA * RA - d * d) - 0.02)
+    }
+    const hw = W * w
+    // 下から上へ: 底 → 側面の下 → 腰 → 肩 → 上面
+    return [
+      [0, bot], [hw * 0.82, bot], [hw * 0.97, bot + 0.08], [hw, -0.04], [hw * 0.985, 0.08],
+      [hw * 0.94, top - 0.07], [hw * 0.78, top - 0.01], [hw * 0.4, top + 0.015], [0, top + 0.02]
+    ]
+  }
+  return loft(range(-L, L, 46), section)
+}
+
+function glassGeometry(S) {
+  // 屋根の高さの並び（前の窓の付け根 → 屋根 → 後ろの窓の付け根）
+  const zf = S.cabF, zr = S.cabR, len = zf - zr
+  const st = [[zr, 0.0], [zr + len * 0.36, 1.0], [zr + len * 0.62, 1.0], [zf, 0.0]]
+  const base = S.hood + 0.04
+  const section = z => {
+    const [, k] = curve(st, z)
+    const h = (S.H - base) * k
+    const w0 = S.W * 0.93, w1 = S.W * 0.66
+    return [[0, base - 0.02], [w0, base - 0.02], [w0 * 0.97, base + h * 0.25], [w1 + (w0 - w1) * 0.25, base + h * 0.85], [w1, base + h], [0, base + h + 0.01]]
+  }
+  return loft(range(zr, zf, 24), section)
+}
+
+function roofGeometry(S) {
+  const zf = S.cabF, zr = S.cabR, len = zf - zr
+  const za = zr + len * 0.38, zb = zr + len * 0.6
+  const base = S.hood + 0.04, top = S.H
+  const section = () => [[0, top - 0.02], [S.W * 0.62, top - 0.025], [S.W * 0.655, top + 0.005], [S.W * 0.5, top + 0.02], [0, top + 0.025]]
+  return loft(range(za, zb, 4), section)
+}
+
+function wheelGeometries() {
+  // タイヤ: 断面を回転させた形（角の丸い四角）
+  const prof = []
+  const r = WHEEL_R, w = 0.14, rr = 0.06
+  for (let i = 0; i <= 6; i++) { const a = -Math.PI / 2 + i / 6 * Math.PI / 2; prof.push(new THREE.Vector2(r - rr + Math.cos(a) * rr, -w + rr + Math.sin(a) * rr)) }
+  for (let i = 0; i <= 6; i++) { const a = i / 6 * Math.PI / 2; prof.push(new THREE.Vector2(r - rr + Math.cos(a) * rr, w - rr + Math.sin(a) * rr)) }
+  prof.unshift(new THREE.Vector2(r * 0.68, -w)); prof.push(new THREE.Vector2(r * 0.68, w))
+  const tire = new THREE.LatheGeometry(prof, 28).rotateZ(Math.PI / 2)
+  // ホイール: 皿 + 5本スポーク + 中心
+  const rim = new THREE.CylinderGeometry(r * 0.68, r * 0.68, 0.04, 24).rotateZ(Math.PI / 2).translate(0.1, 0, 0)
+  const parts = [rim]
+  for (let i = 0; i < 5; i++) {
+    const s = new THREE.BoxGeometry(0.035, r * 0.6, 0.06).translate(0, r * 0.3, 0).rotateX(i / 5 * Math.PI * 2).translate(0.125, 0, 0)
+    parts.push(s)
+  }
+  parts.push(new THREE.CylinderGeometry(0.06, 0.07, 0.06, 10).rotateZ(Math.PI / 2).translate(0.13, 0, 0))
+  const disc = new THREE.CylinderGeometry(r * 0.55, r * 0.55, 0.03, 20).rotateZ(Math.PI / 2).translate(0.04, 0, 0)
+  return { tire, rim: mergeSimple(parts), disc }
+}
+
+function mergeSimple(geos) {
+  const out = new THREE.BufferGeometry()
+  const pos = [], nor = []
+  for (let g of geos) {
+    g = g.index ? g.toNonIndexed() : g
+    pos.push(...g.attributes.position.array); nor.push(...g.attributes.normal.array)
+  }
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3))
+  return out
+}
+
+// 共有の材質（車ごとに変わるのは塗装だけ）
+let shared = null
+function sharedMats() {
+  if (shared) return shared
+  shared = {
+    glass: new THREE.MeshPhysicalMaterial({ color: 0x06090c, metalness: 0.0, roughness: 0.06, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 0.42 }),
+    tire: new THREE.MeshStandardMaterial({ color: 0x18191b, roughness: 0.88 }),
+    rim: new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 1, roughness: 0.22 }),
+    disc: new THREE.MeshStandardMaterial({ color: 0x55585e, metalness: 0.8, roughness: 0.45 }),
+    black: new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.55, metalness: 0.2 }),
+    chrome: new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 1, roughness: 0.12 }),
+    head: new THREE.MeshPhysicalMaterial({ color: 0xf4f6fa, emissive: 0xfff6e0, emissiveIntensity: 0.4, metalness: 0, roughness: 0.05, clearcoat: 1 }),
+    flame: new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
+  }
+  return shared
 }
 
 export class CarModel {
   constructor(carId = 'runner', paint = 0xe8432e) {
-    this.S = SHAPES[carId] || SHAPES.runner
-    const S = this.S
+    const S = this.S = SHAPES[carId] || SHAPES.runner
+    const M = sharedMats()
     this.group = new THREE.Group()
     this.group.rotation.order = 'YXZ'
-    const paintMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.35 })
-    this.body = new THREE.Mesh(bodyGeometry(S, paint), paintMat)
-    this.body.castShadow = true
-    this.body.position.y = 0.08
-    this.group.add(this.body)
+    this.paintMat = new THREE.MeshPhysicalMaterial({ color: paint, metalness: 0.3, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 0.9 })
+    this.paintColor = new THREE.Color(paint)
+    const add = (geo, mat, cast = true) => { const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; this.group.add(m); return m }
+
+    this.body = add(bodyGeometry(S), this.paintMat)
     this.base = Float32Array.from(this.body.geometry.attributes.position.array)
+    add(glassGeometry(S), M.glass)
+    add(roofGeometry(S), this.paintMat)
+
+    // 前: グリルと灯火、後ろ: テールランプの帯と排気管
+    const grille = add(new THREE.BoxGeometry(S.W * 1.1, 0.12, 0.05), M.black, false); grille.position.set(0, S.hood - 0.38, S.L - 0.02)
+    for (const sx of [-1, 1]) {
+      const h = add(new THREE.BoxGeometry(0.32, 0.07, 0.14), M.head, false)
+      h.position.set(sx * S.W * 0.66, S.hood - 0.2, S.L - 0.18); h.rotation.y = sx * 0.35
+      const ex = add(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 10).rotateX(Math.PI / 2), M.chrome, false)
+      ex.position.set(sx * S.W * 0.42, -0.3, -S.L - 0.02)
+    }
+    this.tailMat = new THREE.MeshStandardMaterial({ color: 0x400808, emissive: 0x7a0a0a, emissiveIntensity: 0.6, roughness: 0.2 })
+    // 後ろ: 左右のテールランプ（つながった細い帯）、黒いディフューザー、ナンバー枠
+    for (const sx of [-1, 1]) {
+      const lamp = add(new THREE.BoxGeometry(S.W * 0.55, 0.1, 0.06), this.tailMat, false)
+      lamp.position.set(sx * S.W * 0.6, S.hood - 0.12, -S.L + 0.02); lamp.rotation.y = -sx * 0.18
+    }
+    const bar = add(new THREE.BoxGeometry(S.W * 0.7, 0.025, 0.04), this.tailMat, false); bar.position.set(0, S.hood - 0.1, -S.L - 0.005)
+    const dif = add(new THREE.BoxGeometry(S.W * 1.55, 0.14, 0.18), M.black, false); dif.position.set(0, -0.3, -S.L + 0.08)
+    for (let i = -2; i <= 2; i++) { const fin = add(new THREE.BoxGeometry(0.02, 0.12, 0.2), M.black, false); fin.position.set(i * 0.22, -0.32, -S.L - 0.02) }
+    const plate = add(new THREE.BoxGeometry(0.42, 0.13, 0.02), new THREE.MeshStandardMaterial({ color: 0x9d9a92, roughness: 0.6 }), false); plate.position.set(0, -0.08, -S.L - 0.01)
+    const fplate = plate.clone(); fplate.position.set(0, -0.16, S.L + 0.0); this.group.add(fplate)
 
     // 外れる部品
-    const mk = (fn, color, mat = null) => { const b = new Builder(); fn(b, color); const m = new THREE.Mesh(b.geometry(), mat || new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.3 })); m.castShadow = true; this.group.add(m); return m }
-    this.parts = {
-      bumper: mk(b => b.box(0, -0.12, S.len + 0.08, S.w * 0.98, 0.14, 0.12, 0x2a2c30), 0),
-      hood: mk(b => b.box(0, S.h / 2 - 0.02, S.len * 0.62, S.w * 0.86, 0.04, S.len * 0.3, paint), 0),
-      wing: S.wing ? mk(b => { b.box(0, S.h / 2 + 0.38, -S.len + 0.2, S.w, 0.04, 0.2, paint); for (const sx of [-0.6, 0.6]) b.box(sx * S.w, S.h / 2 + 0.2, -S.len + 0.22, 0.05, 0.18, 0.06, 0x222222) }, 0) : null,
-      bar: S.bar ? mk(b => { b.box(0, 0.05, S.len + 0.25, S.w * 0.85, 0.07, 0.07, 0x9aa0a8); b.box(0, 0.3, S.len + 0.25, S.w * 0.85, 0.07, 0.07, 0x9aa0a8); for (const sx of [-0.7, 0.7]) b.box(sx * S.w, 0.18, S.len + 0.25, 0.06, 0.2, 0.06, 0x9aa0a8) }, 0) : null,
-      mirrorL: mk(b => b.box(S.w + 0.1, S.h / 2 + 0.15, S.cabBack + S.cabLen * 0.8, 0.1, 0.07, 0.1, paint), 0),
-      mirrorR: mk(b => b.box(-S.w - 0.1, S.h / 2 + 0.15, S.cabBack + S.cabLen * 0.8, 0.1, 0.07, 0.1, paint), 0)
+    const P = {}
+    P.bumper = add(new THREE.BoxGeometry(S.W * 1.5, 0.08, 0.22), M.black); P.bumper.position.set(0, -0.3, S.L - 0.2)
+    P.hood = add(new THREE.BoxGeometry(S.W * 0.9, 0.03, 0.75), this.paintMat); P.hood.position.set(0, S.hood - 0.06, S.L - 0.85); P.hood.rotation.x = 0.13
+    if (S.wing) {
+      const g = new THREE.Group()
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(S.W * 1.8, 0.03, 0.28), this.paintMat); blade.position.y = 0.25; blade.rotation.x = -0.08; blade.castShadow = true
+      g.add(blade)
+      for (const sx of [-0.62, 0.62]) { const st = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.24, 0.1), M.black); st.position.set(sx * S.W, 0.12, 0); g.add(st) }
+      g.position.set(0, S.hood + 0.02, -S.L + 0.22)
+      this.group.add(g); P.wing = g
     }
+    if (S.bar) {
+      const g = new THREE.Group()
+      for (const y of [-0.22, 0.02]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, S.W * 1.6, 8).rotateZ(Math.PI / 2), M.chrome); b.position.y = y; g.add(b) }
+      for (const sx of [-0.65, 0.65]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.3, 8), M.chrome); b.position.set(sx * S.W, -0.1, 0); g.add(b) }
+      g.position.set(0, 0, S.L + 0.18); this.group.add(g); P.bar = g
+    }
+    for (const [k, sx] of [['mirrorL', 1], ['mirrorR', -1]]) {
+      const m = add(new THREE.BoxGeometry(0.12, 0.08, 0.16), this.paintMat); m.position.set(sx * (S.W * 0.97 + 0.07), S.hood + 0.12, S.cabF - 0.05); P[k] = m
+    }
+    this.parts = P
     this.lost = new Set()
 
-    // 灯火
-    const lights = new Builder()
-    for (const sx of [-0.68, 0.68]) lights.box(sx * S.w, 0.05, S.len + 0.01, 0.2, 0.07, 0.03, 0xfff6d8)
-    this.head = new THREE.Mesh(lights.geometry(), new THREE.MeshBasicMaterial({ vertexColors: true }))
-    this.group.add(this.head)
-    const tail = new Builder()
-    for (const sx of [-0.7, 0.7]) tail.box(sx * S.w, 0.12, -S.len - 0.01, 0.22, 0.07, 0.03, 0xffffff)
-    this.tailMat = new THREE.MeshBasicMaterial({ color: 0x661010 })
-    this.group.add(new THREE.Mesh(tail.geometry(), this.tailMat))
-
     // 車輪
+    const WG = wheelGeometries()
     this.wheels = []
-    const wg = new THREE.CylinderGeometry(0.38, 0.38, 0.32, 14).rotateZ(Math.PI / 2)
-    const wm = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.9 })
-    const hub = new THREE.MeshStandardMaterial({ color: 0xb8bcc4, metalness: 0.7, roughness: 0.3 })
     for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
       const pivot = new THREE.Group()
-      pivot.position.set(sx * (S.w - 0.05), -0.17, sz * (S.len - 0.62))
-      const w = new THREE.Mesh(wg, wm)
-      const h = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.34, 8).rotateZ(Math.PI / 2), hub)
-      w.add(h)
-      w.castShadow = true
-      pivot.add(w)
+      pivot.position.set(sx * S.track, -0.19, sz * WHEEL_Z)
+      const spin = new THREE.Group()
+      const tire = new THREE.Mesh(WG.tire, M.tire); tire.castShadow = true
+      const rim = new THREE.Mesh(WG.rim, M.rim), disc = new THREE.Mesh(WG.disc, M.disc)
+      if (sx < 0) { rim.scale.x = -1; disc.scale.x = -1 }
+      spin.add(tire, rim, disc)
+      pivot.add(spin)
       this.group.add(pivot)
-      this.wheels.push({ pivot, w, front: sz > 0, rest: pivot.position.y, side: sx })
+      this.wheels.push({ pivot, w: spin, front: sz > 0, rest: pivot.position.y })
     }
 
     // ブーストの炎
     this.flames = []
-    const fm = new THREE.MeshBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
-    for (const sx of [-0.4, 0.4]) {
-      const f = new THREE.Mesh(new THREE.ConeGeometry(0.16, 1.4, 10, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.7), fm)
-      f.position.set(sx * S.w, -0.05, -S.len - 0.05)
+    for (const sx of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.1, 1.2, 10, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.6), M.flame)
+      f.position.set(sx * S.W * 0.42, -0.3, -S.L - 0.08)
       f.visible = false
       this.group.add(f)
       this.flames.push(f)
@@ -118,7 +249,7 @@ export class CarModel {
     this.dentCount = 0
   }
 
-  // 凹みを頂点に反映する（凹みが増えたときだけ）
+  // 凹みを頂点に反映する（凹みの数が変わったときだけ）
   applyDents(dents) {
     if (dents.length === this.dentCount) return
     this.dentCount = dents.length
@@ -129,10 +260,9 @@ export class CarModel {
     for (const d of dents) {
       const l = Math.hypot(d.x, d.z) || 1
       const dx = d.x / l, dz = d.z / l
-      // 当たった点は、車の輪郭（楕円）の上
-      const hx = dx * S.w * 1.05, hz = dz * S.len * 1.02
-      const r = 1.0 + d.s * 0.6
-      const depth = 0.18 + d.s * 0.6
+      const hx = dx * S.W * 1.02, hz = dz * S.L * 1.0
+      const r = 0.9 + d.s * 0.6
+      const depth = 0.16 + d.s * 0.5
       for (let i = 0; i < p.count; i++) {
         const x = a[i * 3], z = a[i * 3 + 2]
         const dist = Math.hypot(x - hx, z - hz)
@@ -140,24 +270,28 @@ export class CarModel {
         const k = (1 - dist / r) ** 2 * depth
         a[i * 3] -= dx * k
         a[i * 3 + 2] -= dz * k
-        a[i * 3 + 1] -= k * 0.25
+        a[i * 3 + 1] -= k * 0.3 * Math.sin(i * 12.9898) // 板金のよれ
       }
     }
     p.needsUpdate = true
     this.body.geometry.computeVertexNormals()
   }
 
-  // 損傷で外れる部品。外れた部品は fx 側で飛ばすので、外れた瞬間の部品を返す
+  // 損傷で外れる部品。外れた瞬間の部品を返す（fx 側で飛ばす）。塗装も傷むほどくすむ
   updateParts(dmg) {
-    // 車体が傷むほど塗装がくすみ、煤ける
-    const k = 0.45 + 0.55 * Math.max(0, Math.min(1, dmg.body))
-    if (Math.abs(this.body.material.color.r - k) > 0.01) this.body.material.color.setRGB(k, k * 0.97, k * 0.95)
+    const k = 0.5 + 0.5 * Math.max(0, Math.min(1, dmg.body))
+    const want = this.paintColor.clone().multiplyScalar(k).lerp(new THREE.Color(0x2a2522), (1 - k) * 0.6)
+    if (!this.paintMat.color.equals(want)) {
+      this.paintMat.color.copy(want)
+      this.paintMat.clearcoat = 0.3 + 0.7 * k
+      this.paintMat.roughness = 0.38 + (1 - k) * 0.5
+    }
     const out = []
     const rules = [['mirrorL', 0.85], ['bumper', 0.7], ['mirrorR', 0.6], ['bar', 0.55], ['hood', 0.45], ['wing', 0.3]]
-    for (const [k, th] of rules) {
-      const m = this.parts[k]
-      if (!m || this.lost.has(k)) continue
-      if (dmg.body < th) { this.lost.add(k); m.visible = false; out.push(m) }
+    for (const [key, th] of rules) {
+      const m = this.parts[key]
+      if (!m || this.lost.has(key)) continue
+      if (dmg.body < th) { this.lost.add(key); m.visible = false; out.push(m) }
     }
     return out
   }
@@ -167,30 +301,27 @@ export class CarModel {
     this.lost.clear()
   }
 
-  // 毎フレーム: 位置・姿勢・車輪・灯火・炎
   update(state, dt, { steer = 0, braking = false, boosting = false } = {}) {
     const g = this.group
     g.position.set(state.x, state.y, state.z)
     g.rotation.set(-state.pitch, state.yaw, state.roll)
-    const v = Math.hypot(state.vx, state.vz)
     const fwd = state.vx * Math.sin(state.yaw) + state.vz * Math.cos(state.yaw)
-    this.spin += fwd * dt / 0.38
+    this.spin += fwd * dt / WHEEL_R
     for (const w of this.wheels) {
       w.w.rotation.x = this.spin
-      if (w.front) w.pivot.rotation.y = -steer * 0.45
-      // 空中ではタイヤが垂れる
+      if (w.front) w.pivot.rotation.y = -steer * 0.42
       const drop = state.grounded ? 0 : 0.12
       w.pivot.position.y += (w.rest - drop - w.pivot.position.y) * Math.min(1, dt * 10)
     }
-    this.tailMat.color.setHex(braking ? 0xff2a2a : 0x661010)
+    this.tailMat.emissiveIntensity = braking ? 3.2 : 0.6
     for (const f of this.flames) {
       f.visible = boosting
-      if (boosting) { const s = 0.8 + Math.random() * 0.5; f.scale.set(1, 1, s) }
+      if (boosting) f.scale.set(1, 1, 0.8 + Math.random() * 0.5)
     }
-    return v
   }
 
   dispose() {
     this.group.traverse(o => { if (o.geometry) o.geometry.dispose() })
+    this.paintMat.dispose()
   }
 }

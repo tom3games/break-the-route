@@ -9,12 +9,13 @@ export class Builder {
 
   // 8頂点で決まる六面体（坂や傾いた板もこれで作る）。p は [x,y,z] x8:
   // 0..3 = 下面（-u-v, +u-v, +u+v, -u+v）、4..7 = 上面（同順）
-  hexa(p, color, { top = null, uvScale = 0, shade = true } = {}) {
+  hexa(p, color, { top = null, uvScale = 0, shade = true, noTop = false, noBottom = false } = {}) {
     const faces = [
       [4, 5, 6, 7, 'top'], [3, 2, 1, 0, 'bottom'],
       [0, 1, 5, 4, 's'], [1, 2, 6, 5, 's'], [2, 3, 7, 6, 's'], [3, 0, 4, 7, 's']
     ]
     for (const [a, b, c, d, kind] of faces) {
+      if ((noTop && kind === 'top') || (noBottom && kind === 'bottom')) continue
       const col = kind === 'top' && top != null ? top : color
       _c.set(col)
       if (shade && kind === 's') _c.multiplyScalar(0.86)
