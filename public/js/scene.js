@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { Builder, textTexture } from './geo.js'
 import { pbr, boxMap, terrainMaterial } from './look.js'
 import { buildForest, buildTufts } from './trees.js'
+import { Q } from './quality.js'
 import { terrain, toWorld, slabTop, BOUNDS, CANYON } from '../shared/track.js'
 import { DESTRUCT } from '../shared/config.js'
 
@@ -278,7 +279,7 @@ export function buildScene(scene, world) {
       const h = terrain(px, pz)
       if (h < -2.5) continue
       const dens = inPlay ? forestDensity(px, pz) : 0.75
-      if (rnd() > dens * 0.95) continue
+      if (rnd() > dens * 0.95 * Q.trees) continue
       if (!clearOf(px, pz)) continue
       const gnd = world.groundAt(px, pz, h + 1).h
       if (gnd > h + 0.5) continue // 橋や高架の上には生やさない
@@ -292,7 +293,7 @@ export function buildScene(scene, world) {
       const L = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az)
       for (let d = 0; d < L; d += 1.6) {
         for (const side of [-1, 1]) {
-          if (rnd() < 0.35) continue
+          if (rnd() < 1 - 0.65 * Q.tufts) continue
           const off = sg.hw + 1.5 + Math.pow(rnd(), 1.6) * 22
           const tx = sg.ax + (sg.bx - sg.ax) * d / L + (-(sg.bz - sg.az) / L) * off * side + (rnd() - 0.5) * 2
           const tz = sg.az + (sg.bz - sg.az) * d / L + ((sg.bx - sg.ax) / L) * off * side + (rnd() - 0.5) * 2

@@ -119,6 +119,7 @@ button { font-family: inherit; }
 .keys td:first-child { white-space: nowrap; width: 40%; }
 kbd { display: inline-block; min-width: 22px; padding: 2px 6px; margin-right: 3px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.3); border-bottom-width: 3px; font: 700 11px var(--f-num); text-align: center; }
 .pad { font-size: 12px; color: var(--mute); line-height: 1.6; }
+.pad.credit { font-size: 10.5px; opacity: 0.8; }
 #fullMap { width: auto; max-width: 100%; height: min(62vh, 520px); background: #1b1e23; border-radius: 8px; margin-top: 14px; display: block; }
 
 /* ---------------------------------------------------------- HUD */
@@ -204,4 +205,65 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 6px; margin-right: 3p
   .btn { min-height: 40px; }
   .foot { margin-top: 8px; }
   .tagline { font-size: 16px; margin: 8px 0 10px; }
+}
+
+/* ---------------------------------------------------------- スマホの操作 */
+#touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; user-select: none; -webkit-user-select: none; touch-action: none; }
+#touch button { pointer-events: auto; touch-action: none; -webkit-touch-callout: none; font-family: var(--f-num); font-weight: 700; color: #fff; border: 2px solid rgba(255,255,255,0.35); background: rgba(20,22,26,0.42); backdrop-filter: blur(2px); }
+#touch button.on { background: rgba(255,90,31,0.75); border-color: #fff; }
+.t-steer { position: absolute; left: 0; bottom: 0; width: 44vw; height: 62vh; pointer-events: auto; touch-action: none; }
+.t-knob { position: absolute; left: 22%; top: 70%; width: 86px; height: 86px; margin: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,0.45); background: rgba(255,255,255,0.12); transform: translate(-50%, -50%); }
+.t-knob::after { content: ''; position: absolute; inset: 26px; border-radius: 50%; background: rgba(255,255,255,0.75); }
+.t-knob.on { border-color: #fff; background: rgba(255,90,31,0.3); }
+.t-hint { position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: max(6px, env(safe-area-inset-bottom)); font-size: 11px; color: rgba(255,255,255,0.75); white-space: nowrap; text-shadow: 0 1px 3px #000; }
+.t-top { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); display: flex; gap: 8px; }
+.t-top button { width: 44px; height: 44px; border-radius: 10px; padding: 9px; }
+.t-top svg { width: 100%; height: 100%; display: block; }
+.t-pedals { position: absolute; right: max(10px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); display: grid; grid-template-columns: 88px 104px; grid-template-rows: 58px 116px; gap: 10px; }
+.t-pedals .t-small { border-radius: 12px; font-size: 13px; letter-spacing: 0.06em; }
+.t-pedals .t-boost { border-color: rgba(127,212,255,0.7); }
+.t-pedals .t-brake { border-radius: 16px; font-size: 14px; }
+.t-pedals .t-gas { border-radius: 18px; font-size: 16px; background: rgba(54,195,122,0.35); border-color: rgba(54,195,122,0.9); }
+.t-pedals .t-gas.on { background: rgba(54,195,122,0.8); }
+/* 縦持ち: 下の帯に並べる */
+@media (orientation: portrait) {
+  .t-steer { width: 50vw; height: 34vh; }
+  .t-pedals { grid-template-columns: 74px 92px; grid-template-rows: 50px 100px; }
+}
+/* タッチ端末では HUD を詰める */
+body.touch .hud-bl { display: none; }
+body.touch #hHint { top: 64px; bottom: auto; }
+body.touch .hud-br { right: auto; left: 50%; transform: translateX(-50%); bottom: max(8px, env(safe-area-inset-bottom)); width: 170px; text-align: center; }
+body.touch .speed b { font-size: 40px; }
+body.touch .speed span { font-size: 12px; }
+body.touch .boost { height: 14px; margin-top: 4px; }
+body.touch .boost span { font-size: 9px; }
+body.touch #miniMap { top: 60px; right: max(8px, env(safe-area-inset-right)); bottom: auto; width: 104px; height: 104px; }
+body.touch .hud-tr { display: none; }
+body.touch .hud-tl { top: max(8px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); }
+body.touch .pos b { font-size: 34px; } body.touch .pos span { font-size: 14px; }
+body.touch .time { font-size: 15px; } body.touch .nextcp { font-size: 12px; }
+body.touch .hud-top { top: max(10px, env(safe-area-inset-top)); width: 34vw; left: 50%; transform: translateX(-50%); right: auto; }
+body.touch .center-msg { top: 22%; font-size: clamp(22px, 6vw, 40px); }
+body.touch .count { top: 24%; font-size: clamp(60px, 14vw, 120px); }
+body.touch .dmg-mini { display: block; }
+.dmg-mini { display: none; position: absolute; left: 50%; bottom: max(70px, calc(env(safe-area-inset-bottom) + 62px)); transform: translateX(-50%); width: 120px; height: 6px; background: rgba(255,255,255,0.15); border-radius: 3px; overflow: hidden; }
+.dmg-mini i { position: absolute; inset: 0 auto 0 0; background: #36c37a; }
+@media (orientation: portrait) {
+  body.touch .hud-br { left: max(10px, env(safe-area-inset-left)); transform: none; top: 112px; bottom: auto; width: 120px; text-align: left; }
+  body.touch .dmg-mini { left: max(10px, env(safe-area-inset-left)); transform: none; top: 176px; bottom: auto; width: 120px; }
+  body.touch .hud-top { display: none; }
+}
+/* スマホの横持ち（高さが低い）: タイトルを一画面に収める */
+@media (max-height: 440px) {
+  #title { padding-top: 8px; padding-bottom: 8px; }
+  .hazard, .tagline { display: none; }
+  .logo { font-size: 34px; flex-direction: row; gap: 10px; align-items: baseline; }
+  .logo-sub { font-size: 0.4em; margin: 0; letter-spacing: 0.2em; }
+  .field { margin-bottom: 6px; gap: 3px; }
+  .field input, .field select { padding: 5px 9px; font-size: 15px; }
+  .btn { min-height: 38px; font-size: 14px; }
+  .btns { margin-top: 5px; gap: 8px; }
+  .foot { margin-top: 4px; }
+  .note { margin: 2px 0 0; font-size: 11px; }
 }

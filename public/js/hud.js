@@ -144,6 +144,7 @@ export class HUD {
     }
     for (const k of Object.keys(this.dmgEls)) { this.dmgEls[k].textContent = Math.round(d[k] * 100) + '%'; this.dmgEls[k].style.color = hpColor(d[k]) }
     this.heatEl.style.width = Math.min(100, me.heat * 100) + '%'
+    const bb = $('hBodyBar'); bb.style.width = Math.round(d.body * 100) + '%'; bb.style.background = hpColor(d.body)
     if (me.repairing) { if (this.hintT <= 0.2) this.hint(t('msgRepair'), 0.4) }
 
     this.drawMini(race, me)

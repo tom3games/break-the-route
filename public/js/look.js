@@ -1,7 +1,7 @@
 // 見た目の土台: 実写の空（HDRI）での照明・太陽・霞・画面の後処理・実写テクスチャの材質。
 // 素材は Poly Haven（CC0）。public/assets にある。
 import * as THREE from 'three'
-import { HDRLoader } from '../vendor/jsm/loaders/HDRLoader.js'
+import { Q } from './quality.js'
 import { EffectComposer } from '../vendor/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from '../vendor/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from '../vendor/jsm/postprocessing/UnrealBloomPass.js'
@@ -18,7 +18,7 @@ export function setAniso(renderer) { maxAniso = Math.min(8, renderer.capabilitie
 export function tex(name, map, srgb = false) {
   const key = name + map
   if (cache.has(key)) return cache.get(key)
-  const t = loader.load(`assets/tex/${name}_${map}.webp`)
+  const t = loader.load(`assets/${Q.tex}/${name}_${map}.webp`)
   t.wrapS = t.wrapT = THREE.RepeatWrapping
   t.anisotropy = maxAniso
   if (srgb) t.colorSpace = THREE.SRGBColorSpace
@@ -33,29 +33,20 @@ export function pbr(name, { repeat = 1, color = 0xffffff, roughness = 1, normalS
 }
 
 // ---------------------------------------------------------------- 空と太陽
+// 空は実写（Poly Haven の HDRI をトーンマップした画像。20〜55KB）。太陽の向きは元の HDR から求めた値
+export const SKY_SUN = [0.5546, 0.742, 0.3767]
 export function loadSky(renderer, scene, sun, onReady) {
-  new HDRLoader().setDataType(THREE.FloatType).load('assets/hdri/sky_2k.hdr', hdr => {
-    hdr.mapping = THREE.EquirectangularReflectionMapping
-    // 写真の中で一番明るい点 = 太陽。その向きから直射光を当てると影が空と合う
-    const { data, width, height } = hdr.image
-    const ch = data.length / (width * height)
-    let best = 0, bx = 0, by = 0
-    for (let y = 0; y < height / 2; y++) for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * ch
-      const l = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722
-      if (l > best) { best = l; bx = x; by = y }
-    }
-    // three の正距円筒の対応（equirectUv の逆）。画像の1行目が真上
-    const u = (bx + 0.5) / width, v = 1 - (by + 0.5) / height
-    const a = (u - 0.5) * Math.PI * 2, lat = (v - 0.5) * Math.PI
-    const dir = new THREE.Vector3(Math.cos(a) * Math.cos(lat), Math.sin(lat), Math.sin(a) * Math.cos(lat))
-    sun.userData.dir = dir.normalize()
+  new THREE.TextureLoader().load(`assets/hdri/${Q.sky}.webp`, sky => {
+    sky.mapping = THREE.EquirectangularReflectionMapping
+    sky.colorSpace = THREE.SRGBColorSpace
     const pm = new THREE.PMREMGenerator(renderer)
-    scene.environment = pm.fromEquirectangular(hdr).texture
-    scene.background = hdr
+    scene.environment = pm.fromEquirectangular(sky).texture
+    scene.background = sky
     scene.backgroundIntensity = 1.0
-    scene.environmentIntensity = 0.9
+    scene.environmentIntensity = 1.0
     pm.dispose()
+    const dir = new THREE.Vector3(...SKY_SUN).normalize()
+    sun.userData.dir = dir
     onReady && onReady(dir)
   })
 }
@@ -74,7 +65,7 @@ const GradeShader = {
     '  if (speed > 0.01) {',
     '    float k = speed * smoothstep(0.12, 0.7, length(c));',
     '    vec4 acc = col;',
-    '    for (int i = 1; i <= 6; i++) { acc += texture2D(tDiffuse, vUv - c * k * 0.035 * float(i)); }',
+    '    for (int i = 1; i <= 6; i++) { acc += texture2D(tDiffuse, vUv - c * k * 0.02 * float(i)); }',
     '    col = acc / 7.0;',
     '  }',
     '  float l = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));',
@@ -89,11 +80,12 @@ const GradeShader = {
 
 export function makeComposer(renderer, scene, camera) {
   const size = renderer.getDrawingBufferSize(new THREE.Vector2())
-  const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 })
+  const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: Q.msaa })
   const composer = new EffectComposer(renderer, rt)
   composer.addPass(new RenderPass(scene, camera))
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.22, 0.5, 0.92)
-  composer.addPass(bloom)
+  // 光のにじみは重いのでスマホでは使わない
+  const bloom = Q.bloom ? new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.22, 0.5, 0.92) : null
+  if (bloom) composer.addPass(bloom)
   const grade = new ShaderPass(GradeShader)
   composer.addPass(grade)
   composer.addPass(new OutputPass())

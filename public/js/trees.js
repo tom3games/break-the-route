@@ -2,6 +2,7 @@
 // 全部を InstancedMesh 2つで描く（何千本でも描画は2回）。
 import * as THREE from 'three'
 import { tex } from './look.js'
+import { Q } from './quality.js'
 
 // 葉の絵: 下から上へ、垂れた枝の房を重ねて細長い円錐の樹冠を描く
 function crownTexture() {
@@ -69,9 +70,9 @@ function crownGeometry() {
 export function buildForest(scene, spots) {
   const n = spots.length
   const trunkGeo = new THREE.CylinderGeometry(0.16, 0.34, 1, 7, 1, true).translate(0, 0.5, 0)
-  const bark = new THREE.TextureLoader().load('assets/tex/japanese_cedar_bark_diff.webp'); bark.colorSpace = THREE.SRGBColorSpace; bark.wrapS = bark.wrapT = THREE.RepeatWrapping; bark.repeat.set(1, 6)
+  const bark = new THREE.TextureLoader().load(`assets/${Q.tex}/japanese_cedar_bark_diff.webp`); bark.colorSpace = THREE.SRGBColorSpace; bark.wrapS = bark.wrapT = THREE.RepeatWrapping; bark.repeat.set(1, 6)
   const trunkMat = new THREE.MeshStandardMaterial({ map: bark, roughness: 0.95, color: 0xb8a898 })
-  const crownMat = new THREE.MeshStandardMaterial({ map: crownTexture(), alphaTest: 0.45, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 0.9, metalness: 0 })
+  const crownMat = new THREE.MeshStandardMaterial({ map: crownTexture(), alphaTest: 0.45, alphaToCoverage: Q.msaa > 0, side: THREE.DoubleSide, roughness: 0.9, metalness: 0 })
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, n)
   const crowns = new THREE.InstancedMesh(crownGeometry(), crownMat, n)
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3()
@@ -126,7 +127,7 @@ export function buildTufts(scene, spots) {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3))
   geo.setIndex(idx)
-  const mat = new THREE.MeshStandardMaterial({ map: grassTexture(), alphaTest: 0.4, alphaToCoverage: true, side: THREE.DoubleSide, roughness: 1 })
+  const mat = new THREE.MeshStandardMaterial({ map: grassTexture(), alphaTest: 0.4, alphaToCoverage: Q.msaa > 0, side: THREE.DoubleSide, roughness: 1 })
   const im = new THREE.InstancedMesh(geo, mat, spots.length)
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3()
   spots.forEach((t, i) => {

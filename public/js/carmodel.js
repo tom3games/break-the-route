@@ -1,6 +1,7 @@
 // 車の見た目（実在の車種ではない架空のクーペ）。断面を前後につないだ曲面の車体に、
 // クリア塗装の材質で空を映す。ぶつけた場所の頂点を押し込んで凹ませ、損傷で部品が外れる。
 import * as THREE from 'three'
+import { GLTFLoader } from '../vendor/jsm/loaders/GLTFLoader.js'
 
 // 車種ごとの寸法（m）。W=半幅, L=半長, H=屋根の高さ（車の原点から）, hood=ボンネットの高さ
 const SHAPES = {
@@ -161,7 +162,7 @@ function sharedMats() {
   return shared
 }
 
-export class CarModel {
+export class ProcCar {
   constructor(carId = 'runner', paint = 0xe8432e) {
     const S = this.S = SHAPES[carId] || SHAPES.runner
     const M = sharedMats()
@@ -323,5 +324,219 @@ export class CarModel {
   dispose() {
     this.group.traverse(o => { if (o.geometry) o.geometry.dispose() })
     this.paintMat.dispose()
+  }
+}
+
+// ======================================================================== 実車級モデル
+// Khronos glTF Sample Assets「CarConcept」（CC-BY 4.0, Eric Chadwick / Darmstadt Graphics Group）を
+// tools/process-car.mjs で軽くした assets/models/car.glb。ロゴは外してある。
+
+let template = null       // 正規化済みの車（複製して使う）
+let loading = null
+
+const VARIANT = { // 車種ごとの体格（x=幅, y=高さ, z=長さ の倍率）と追加部品
+  runner:  { s: [1, 1, 1], wing: false, bar: false },
+  bruiser: { s: [1.07, 1.12, 1.04], wing: false, bar: true },
+  dart:    { s: [0.97, 0.92, 0.97], wing: true, bar: false }
+}
+
+export function loadCarModel(url = 'assets/models/car.glb') {
+  if (loading) return loading
+  loading = new Promise((resolve, reject) => {
+    new GLTFLoader().load(url, gltf => {
+      const src = gltf.scene
+      src.updateMatrixWorld(true)
+      const find = n => src.getObjectByName(n)
+      const wp = n => { const o = find(n); const b = new THREE.Box3().setFromObject(o); return b.getCenter(new THREE.Vector3()) }
+      const fl = wp('WheelFrontL'), fr = wp('WheelFrontR'), rl = wp('WheelRearL')
+      // 前 = 前輪 - 後輪、左 = 左前輪 - 右前輪。これをゲームの +z（前）と +x（左）にそろえる
+      const fwd = fl.clone().sub(rl).normalize(), left = fl.clone().sub(fr).normalize()
+      const up = new THREE.Vector3().crossVectors(fwd, left).normalize() // +z × +x = +y
+      const basis = new THREE.Matrix4().makeBasis(left, up, fwd)        // モデル→ゲームの逆
+      const rot = basis.clone().invert()
+      const holder = new THREE.Group()
+      const inner = new THREE.Group()
+      inner.add(src)
+      inner.applyMatrix4(rot)
+      holder.add(inner)
+      holder.updateMatrixWorld(true)
+      // 大きさ: 前後輪の間隔をゲームの 2.7m（±1.35）に合わせる
+      const wb = fl.distanceTo(rl)
+      const sc = 2.7 / wb
+      inner.scale.multiplyScalar(sc)
+      holder.updateMatrixWorld(true)
+      // 位置: 4輪の中心を原点の真下へ、タイヤの接地を y=-0.55 に
+      const c = new THREE.Vector3(), wheels = ['WheelFrontL', 'WheelFrontR', 'WheelRearL', 'WheelRearR']
+      let bottom = Infinity
+      for (const n of wheels) { const b = new THREE.Box3().setFromObject(find(n)); c.add(b.getCenter(new THREE.Vector3())); bottom = Math.min(bottom, b.min.y) }
+      c.multiplyScalar(1 / 4)
+      inner.position.x -= c.x; inner.position.z -= c.z
+      inner.position.y += -0.55 - bottom
+      holder.updateMatrixWorld(true)
+      src.traverse(o => {
+        if (!o.isMesh) return
+        o.castShadow = true; o.receiveShadow = true
+        // 元のモデルはロゴを発光の型抜きに使っていた。ロゴを外したので、灯火と計器以外の発光は消す
+        const n = o.material.name || ''
+        if (!/^(Headlight|Brakelight|Signallight|Dashboard)$/.test(n) && o.material.emissive) { o.material.emissive.setRGB(0, 0, 0); o.material.emissiveMap = null }
+      })
+      template = holder
+      resolve(holder)
+    }, undefined, reject)
+  })
+  return loading
+}
+
+export function carModelReady() { return !!template }
+
+class RealCar {
+  constructor(carId, paint) {
+    const V = VARIANT[carId] || VARIANT.runner
+    this.group = new THREE.Group()
+    this.group.rotation.order = 'YXZ'
+    const body = template.clone(true)
+    body.scale.set(...V.s)
+    this.group.add(body)
+    this.group.updateMatrixWorld(true)
+    const M = sharedMats()
+    // 材質は車ごとに複製（塗装と灯火を変えるため）
+    const matCache = new Map()
+    const own = m => { if (!matCache.has(m)) matCache.set(m, m.clone()); return matCache.get(m) }
+    this.paintMats = []
+    this.paintColor = new THREE.Color(paint)
+    body.traverse(o => {
+      if (!o.isMesh) return
+      const n = o.material.name || ''
+      if (/^Paint 1/.test(n)) { o.material = own(o.material); if (!this.paintMats.includes(o.material)) { o.material.color.set(paint); this.paintMats.push(o.material) } }
+      else if (n === 'Brakelight') { o.material = own(o.material); this.brakeMat = o.material }
+      else if (n === 'Headlight') { o.material = own(o.material); o.material.emissive = new THREE.Color(0xfff2d8); o.material.emissiveIntensity = 1.2 }
+    })
+    if (this.brakeMat) { this.brakeMat.emissive = new THREE.Color(0xff1a10) }
+    // 車輪: 車輪の中心に軸を作り直す（モデルの原点は車輪の中心ではない）
+    this.wheels = []
+    for (const [n, front] of [['WheelFrontL', true], ['WheelFrontR', true], ['WheelRearL', false], ['WheelRearR', false]]) {
+      const w = body.getObjectByName(n)
+      const b = new THREE.Box3().setFromObject(w)
+      const ctr = this.group.worldToLocal(b.getCenter(new THREE.Vector3()))
+      const steer = new THREE.Group(), spin = new THREE.Group()
+      steer.position.copy(ctr)
+      this.group.add(steer); steer.add(spin)
+      spin.attach(w)
+      this.wheels.push({ pivot: steer, w: spin, front, rest: ctr.y })
+    }
+    // 外れる部品（モデルの実際の部品）
+    const P = {}
+    const pick = (k, name) => { const o = body.getObjectByName(name); if (o) P[k] = o }
+    pick('mirrorL', 'BodyDoorLMirror'); pick('mirrorR', 'BodyDoorRMirror'); pick('hood', 'BodyHood'); pick('door', 'BodyDoorRColor1')
+    for (const k of ['mirrorL', 'mirrorR']) { const base = P[k]; if (base) { const extra = [body.getObjectByName(base.name + 'Color1'), body.getObjectByName(base.name + 'Color2')].filter(Boolean); const g = new THREE.Group(); base.parent.add(g); for (const o of [base, ...extra]) g.attach(o); P[k] = g } }
+    if (V.wing) {
+      const g = new THREE.Group()
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.035, 0.3), this.paintMats[0] || M.black); blade.position.y = 0.2; blade.rotation.x = -0.1; blade.castShadow = true
+      g.add(blade)
+      for (const sx of [-0.6, 0.6]) { const st = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.2, 0.1), M.black); st.position.set(sx, 0.1, 0); g.add(st) }
+      const bb = new THREE.Box3().setFromObject(body)
+      g.position.set(0, bb.max.y - 0.48, this.group.worldToLocal(new THREE.Vector3(0, 0, bb.min.z)).z + 0.3)
+      this.group.add(g); P.wing = g
+    }
+    if (V.bar) {
+      const g = new THREE.Group()
+      for (const y of [-0.25, -0.02]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.7, 8).rotateZ(Math.PI / 2), M.chrome); b.position.y = y; g.add(b) }
+      for (const sx of [-0.7, 0.7]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.3, 8), M.chrome); b.position.set(sx, -0.13, 0); g.add(b) }
+      const bb = new THREE.Box3().setFromObject(body)
+      g.position.set(0, 0, bb.max.z + 0.12)
+      this.group.add(g); P.bar = g
+    }
+    this.parts = P
+    this.lost = new Set()
+    // ブーストの炎
+    this.flames = []
+    const bb = new THREE.Box3().setFromObject(body)
+    for (const sx of [-0.35, 0.35]) {
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.1, 1.2, 10, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.6), M.flame)
+      f.position.set(sx, -0.28, bb.min.z - 0.02)
+      f.visible = false
+      this.group.add(f); this.flames.push(f)
+    }
+    // 凹ませる面（塗装の大きな面だけ。車の座標での頂点を覚えておく）
+    this.dentMeshes = []
+    body.traverse(o => {
+      if (!o.isMesh || !this.paintMats.includes(o.material)) return
+      const g = o.geometry = o.geometry.clone()
+      const rel = new THREE.Matrix4().copy(this.group.matrixWorld).invert().multiply(o.matrixWorld)
+      this.dentMeshes.push({ mesh: o, base: Float32Array.from(g.attributes.position.array), rel, inv: rel.clone().invert() })
+    })
+    this.spin = 0
+    this.dentCount = 0
+  }
+
+  applyDents(dents) {
+    if (dents.length === this.dentCount) return
+    this.dentCount = dents.length
+    const v = new THREE.Vector3()
+    for (const d0 of this.dentMeshes) {
+      const p = d0.mesh.geometry.attributes.position, a = p.array
+      a.set(d0.base)
+      if (!dents.length) { p.needsUpdate = true; continue }
+      for (let i = 0; i < p.count; i++) {
+        v.set(a[i * 3], a[i * 3 + 1], a[i * 3 + 2]).applyMatrix4(d0.rel) // 車の座標へ
+        let moved = false
+        for (const d of dents) {
+          const l = Math.hypot(d.x, d.z) || 1, dx = d.x / l, dz = d.z / l
+          const hx = dx * 0.98, hz = dz * 2.2
+          const r = 0.85 + d.s * 0.6, dist = Math.hypot(v.x - hx, v.z - hz)
+          if (dist > r) continue
+          const k = (1 - dist / r) ** 2 * (0.12 + d.s * 0.42)
+          v.x -= dx * k; v.z -= dz * k; v.y -= k * 0.25
+          moved = true
+        }
+        if (moved) { v.applyMatrix4(d0.inv); a[i * 3] = v.x; a[i * 3 + 1] = v.y; a[i * 3 + 2] = v.z }
+      }
+      p.needsUpdate = true
+      d0.mesh.geometry.computeVertexNormals()
+    }
+  }
+
+  updateParts(dmg) {
+    const k = 0.5 + 0.5 * Math.max(0, Math.min(1, dmg.body))
+    const want = this.paintColor.clone().multiplyScalar(k).lerp(new THREE.Color(0x2a2522), (1 - k) * 0.6)
+    for (const m of this.paintMats) if (!m.color.equals(want)) { m.color.copy(want); m.roughness = 0.25 + (1 - k) * 0.5 }
+    const out = []
+    const rules = [['mirrorL', 0.85], ['mirrorR', 0.6], ['bar', 0.55], ['hood', 0.45], ['wing', 0.35], ['door', 0.25]]
+    for (const [key, th] of rules) {
+      const m = this.parts[key]
+      if (!m || this.lost.has(key)) continue
+      if (dmg.body < th) { this.lost.add(key); m.visible = false; out.push(m) }
+    }
+    return out
+  }
+
+  resetParts() { for (const k of Object.keys(this.parts)) this.parts[k].visible = true; this.lost.clear() }
+
+  update(state, dt, { steer = 0, braking = false, boosting = false } = {}) {
+    const g = this.group
+    g.position.set(state.x, state.y, state.z)
+    g.rotation.set(-state.pitch, state.yaw, state.roll)
+    const fwd = state.vx * Math.sin(state.yaw) + state.vz * Math.cos(state.yaw)
+    this.spin += fwd * dt / WHEEL_R
+    for (const w of this.wheels) {
+      w.w.rotation.x = this.spin
+      if (w.front) w.pivot.rotation.y = -steer * 0.42
+      const drop = state.grounded ? 0 : 0.1
+      w.pivot.position.y += (w.rest - drop - w.pivot.position.y) * Math.min(1, dt * 10)
+    }
+    if (this.brakeMat) this.brakeMat.emissiveIntensity = braking ? 6 : 1.2
+    for (const f of this.flames) { f.visible = boosting; if (boosting) f.scale.set(1, 1, 0.8 + Math.random() * 0.5) }
+  }
+
+  dispose() {
+    for (const d of this.dentMeshes) d.mesh.geometry.dispose()
+    for (const m of this.paintMats) m.dispose()
+  }
+}
+
+// 実車モデルが読めていればそれを、まだなら手続きの車を使う
+export class CarModel {
+  constructor(carId = 'runner', paint = 0xe8432e) {
+    return template ? new RealCar(carId, paint) : new ProcCar(carId, paint)
   }
 }

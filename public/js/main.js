@@ -7,7 +7,7 @@ import { Race, mulberry } from '../shared/race.js'
 import { speedOf } from '../shared/physics.js'
 import { createDriver, drive, planRoute } from '../shared/ai.js'
 import { buildScene, propGeometry } from './scene.js'
-import { CarModel } from './carmodel.js'
+import { CarModel, loadCarModel } from './carmodel.js'
 import { FX } from './fx.js'
 import { Audio } from './audio.js'
 import { Input } from './input.js'
@@ -15,14 +15,16 @@ import { t, applyI18n, setLang, getLang, placeText } from './i18n.js'
 import { loadProfile, saveProfile, buyUpgrade, sellUpgrade } from './save.js'
 import { HUD, drawFullMap } from './hud.js'
 import { loadSky, makeComposer, setAniso } from './look.js'
+import { Q, LOW } from './quality.js'
 import { Online } from './online.js'
+import { Touch } from './touch.js'
 
 const $ = id => document.getElementById(id)
 const STEP = GAME.step
 
 // ---------------------------------------------------------------- 描画の土台
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true })
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75))
+renderer.setPixelRatio(Q.pixelRatio)
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 1.0
@@ -37,8 +39,8 @@ scene.fog = new THREE.FogExp2(0xc9d6e2, 0.0016)
 const sun = new THREE.DirectionalLight(0xfff1dc, 3.2)
 sun.userData.dir = new THREE.Vector3(-0.45, 0.62, -0.64).normalize()
 sun.castShadow = true
-sun.shadow.mapSize.set(2048, 2048)
-const SH = 70
+sun.shadow.mapSize.set(Q.shadow, Q.shadow)
+const SH = Q.shadowRange
 Object.assign(sun.shadow.camera, { left: -SH, right: SH, top: SH, bottom: -SH, near: 1, far: 400 })
 sun.shadow.normalBias = 0.04
 sun.shadow.bias = -0.0004
@@ -188,6 +190,7 @@ function snapCamera() {
 function show(id) {
   for (const s of ['title', 'garage', 'howto', 'pause', 'results', 'lobby']) $(s).classList.toggle('hidden', s !== id)
   $('hud').classList.toggle('hidden', !(mode === 'race' && (id === null || id === 'pause')))
+  if (typeof syncTouch === 'function') setTimeout(syncTouch, 0)
   if (id === 'garage') renderGarage()
   if (id === 'howto') drawFullMap($('fullMap'), world)
 }
@@ -205,8 +208,25 @@ function beginPlayerRace() {
   mode = 'race'
   startRace()
   show(null)
-  hud.hint(t('hintStart'), 6)
+  hud.hint(touchMode ? t('hintTouch') : t('hintStart'), 6)
 }
+
+// スマホ: タッチ操作。タッチが主の端末か、画面を指で触ったらタッチ用の表示にする
+let touchMode = LOW && matchMedia('(pointer: coarse)').matches
+const touch = new Touch($('touch'), {
+  onPause: () => setPause(true),
+  onCam: () => { camMode = (camMode + 1) % 3 },
+  onRespawn: () => { wantRespawn = true }
+})
+input.touch = touch
+function setTouchMode(on) { touchMode = on; document.body.classList.toggle('touch', on); syncTouch() }
+function syncTouch() { touch.show(touchMode && mode === 'race' && !paused && !menuOpen && $('pause').classList.contains('hidden') && $('results').classList.contains('hidden')) }
+addEventListener('pointerdown', e => { if (e.pointerType === 'touch' && !touchMode) setTouchMode(true) }, { capture: true })
+setTouchMode(touchMode)
+// iPhone の拡大（ピンチ・ダブルタップ）を止める
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault())
+document.addEventListener('dblclick', e => e.preventDefault())
+document.addEventListener('touchmove', e => { if (!e.target.closest('.panel')) e.preventDefault() }, { passive: false })
 
 // タイトル
 $('nameInput').value = profile.name
@@ -565,7 +585,8 @@ function frame() {
       // 外れた部品を飛ばす
       const clone = part.clone()
       part.updateWorldMatrix(true, false)
-      clone.applyMatrix4(part.matrixWorld)
+      part.matrixWorld.decompose(clone.position, clone.quaternion, clone.scale) // 車から外して世界に置く
+      clone.rotation.setFromQuaternion(clone.quaternion)
       clone.visible = true
       fx.launch(clone, { vx: c.vx * 0.6 + (Math.random() - 0.5) * 6, vy: 4 + Math.random() * 3, vz: c.vz * 0.6 + (Math.random() - 0.5) * 6, spin: 10, life: 12 })
       if (isMe) audio.metal(0.8)
@@ -576,8 +597,8 @@ function frame() {
       const fwx = Math.sin(c.yaw), fwz = Math.cos(c.yaw)
       if (c.dmg.engine < 0.55 && Math.random() < (0.55 - c.dmg.engine) * 1.6) fx.smoke(c.x + fwx * 1.4, c.y + 0.6, c.z + fwz * 1.4, { dark: 0.15 + c.dmg.engine * 0.5, size: 1.4, life: 1.4, vy: 2 })
       if (c.overheat && Math.random() < 0.5) fx.smoke(c.x + fwx * 1.8, c.y + 0.5, c.z + fwz * 1.8, { dark: 0.85, size: 1.2, life: 0.9, vy: 2.5, a: 0.4 })
-      if (c.grounded && c.drifting && Math.random() < 0.8) {
-        for (const sx of [-0.8, 0.8]) fx.smoke(c.x - fwx * 1.5 + Math.cos(c.yaw) * sx, c.y - 0.4, c.z - fwz * 1.5 - Math.sin(c.yaw) * sx, { dark: 0.78, size: 1.6, life: 1.1, vy: 0.6, a: 0.35 })
+      if (c.grounded && c.drifting && c.slip > 5 && Math.random() < 0.6) {
+        for (const sx of [-0.8, 0.8]) fx.smoke(c.x - fwx * 1.6 + Math.cos(c.yaw) * sx, c.y - 0.45, c.z - fwz * 1.6 - Math.sin(c.yaw) * sx, { dark: 0.8, size: 1.0, life: 0.9, vy: 0.5, a: 0.2 })
       }
       if (c.grounded && v > 18 && (c.surf === 'dirt' || c.surf === 'grass') && Math.random() < 0.5) {
         fx.dust(c.x - fwx * 2, c.y - 0.5, c.z - fwz * 2, 1, c.surf === 'grass' ? [0.5, 0.56, 0.36] : [0.68, 0.58, 0.44], 0.7)
@@ -667,9 +688,12 @@ function updateCamera(dt) {
     hx = hx * (1 - k) + (c.vx / v) * k; hz = hz * (1 - k) + (c.vz / v) * k
     const l = Math.hypot(hx, hz); hx /= l; hz /= l
   }
-  const presets = [[6.2, 2.0], [10, 3.6], [0.2, 1.1]]
-  const [back0, up0] = presets[camMode]
-  let back = back0 + Math.min(2.5, v * 0.035), up = up0
+  // レースゲームの定番: 車のすぐ後ろ・低い位置から前を水平に見る（0）/ 少し引き（1）/ ボンネット（2）
+  const presets = [[5.0, 1.45], [8.5, 2.6], [0, 0]]
+  let [back0, up0] = presets[camMode]
+  // 縦長の画面は上が空ばかりになるので、少し高くから見下ろす
+  if (camera.aspect < 1 && camMode !== 2) { back0 += 1.2; up0 += 1.1 }
+  let back = back0 + Math.min(1.6, v * 0.022), up = up0
   // カウントダウン中は前から回り込む
   if (race && race.phase === 'countdown' && c === me) {
     const k = Math.max(0, Math.min(1, (-race.t - 0.6) / (GAME.countdownSec - 0.6)))
@@ -700,18 +724,26 @@ function updateCamera(dt) {
   }
   const gy = world.groundAt(tx, tz, ty).h + 0.8
   if (ty < gy) ty = gy
-  const k = 1 - Math.exp(-dt * (camMode === 2 ? 30 : 7))
+  const k = 1 - Math.exp(-dt * 7)
   _v.set(tx, ty, tz)
   cam.pos.lerp(_v, k)
-  if (camMode === 2) cam.pos.copy(_v)
-  _l.set(pos.x + hx * 6, pos.y + 1.0, pos.z + hz * 6)
+  _l.set(pos.x + hx * 10, pos.y + (camera.aspect < 1 ? 0.2 : 1.0), pos.z + hz * 10)
   cam.look.lerp(_l, 1 - Math.exp(-dt * 12))
+  if (camMode === 2 && m && !(race && race.phase === 'countdown')) {
+    // ボンネットの上（車体の傾きに合わせる）
+    m.group.updateMatrixWorld()
+    cam.pos.copy(m.group.localToWorld(_v.set(0, 0.78, 0.35)))
+    cam.look.copy(m.group.localToWorld(_l.set(0, 0.65, 12)))
+  }
   camera.position.copy(cam.pos)
   // 揺れ
   const sh = fx.shake
   if (sh > 0) camera.position.add(_v.set((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh * 0.7, (Math.random() - 0.5) * sh))
   camera.lookAt(cam.look)
-  const fov = 64 + Math.min(14, v * 0.16) + (c.boosting ? 6 : 0)
+  // 縦長の画面では横の見える幅が狭くならないよう縦の画角を広げる
+  const asp = camera.aspect
+  const base = asp >= 1 ? 62 : Math.min(98, 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(44)) / asp) * 180 / Math.PI)
+  const fov = base + Math.min(12, v * 0.14) + (c.boosting ? 6 : 0)
   cam.fov += (fov - cam.fov) * (1 - Math.exp(-dt * 4))
   camera.fov = cam.fov
   camera.updateProjectionMatrix()
@@ -762,7 +794,7 @@ function ensureOnline() {
       menuOpen = false
       startRace({ view })
       show(null)
-      hud.hint(t('hintStart'), 5)
+      hud.hint(touchMode ? t('hintTouch') : t('hintStart'), 5)
     },
     onResult: (list) => { if (onlineRace || mode === 'race') showResults(list) },
     onRemoteBreak: br => { if (!world.destroyed.has(br.id)) { world.breakObj(br.id); breakInfo.set(br.id, br) } },
@@ -889,6 +921,20 @@ serverAvailable().then(ok => {
 // ---------------------------------------------------------------- 起動
 toTitle()
 requestAnimationFrame(frame)
+// 実車モデルは画面が出てから読む（読み終わるまでは手続きの車で走れる）。届いたら今いる車を差し替える
+setTimeout(() => loadCarModel(Q.carLite ? 'assets/models/car_lite.glb' : 'assets/models/car.glb').then(() => {
+  if (!race) return
+  for (const e of race.entries) {
+    const old = models.get(e.id)
+    const paint = old && old.paintColor ? old.paintColor.getHex() : e.car.paint
+    if (old) { scene.remove(old.group); old.dispose() }
+    const m = new CarModel(e.car.carId, paint ?? 0xe8432e)
+    scene.add(m.group)
+    m.updateParts(e.car.dmg)
+    models.set(e.id, m)
+  }
+  if (preview) preview.key = ''
+}).catch(err => console.warn('car model', err)), 300)
 addEventListener('pointerdown', () => audio.start(), { once: true })
 
 // 検証用の窓口（本番の操作には使わない）

@@ -22,6 +22,7 @@ export class Input {
     addEventListener('keyup', e => { this.down.delete(e.code); this.airFresh.delete(e.code) })
     addEventListener('blur', () => { this.down.clear(); this.airFresh.clear() })
     this.padPrev = {}
+    this.touch = null // Touch（スマホ）
   }
 
   any(name) { return KEYS[name].some(k => this.down.has(k)) }
@@ -44,6 +45,16 @@ export class Input {
       // W で鼻先を下げ、S で上げる。A/D で傾ける
       inp.pitch = (this.fresh('down') ? 1 : 0) - (this.fresh('up') ? 1 : 0)
       inp.roll = inp.steer
+    }
+    // タッチ
+    const T = this.touch && this.touch.active ? this.touch.state : null
+    if (T) {
+      inp.throttle = Math.max(inp.throttle, T.throttle)
+      inp.brake = Math.max(inp.brake, T.brake)
+      if (Math.abs(T.steer) > 0.04) inp.steer = T.steer
+      if (T.drift) inp.handbrake = true
+      if (T.boost) inp.boost = true
+      if (airborne) { if (Math.abs(T.pitch) > 0.1) inp.pitch = T.pitch; if (Math.abs(T.steer) > 0.04) inp.roll = T.steer }
     }
     // ゲームパッド（標準配置）
     const pads = navigator.getGamepads ? navigator.getGamepads() : []

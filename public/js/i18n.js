@@ -32,7 +32,9 @@ const D = {
     errNotFound: 'その部屋は見つからない', errStarted: 'レース中の部屋には入れない。終わるまで待って', errFull: '満員', errName: '名前を入れて', errConn: 'サーバーにつながらない',
     noServer: 'オンライン対戦はサーバー版で遊べる（README 参照）。このページはオフライン専用。',
     toLobby: 'ロビーへ', waitRematch: 'ホストの再戦を待っています', netOn: 'ONLINE', netOff: 'OFFLINE',
-    pcOnly: 'このゲームは PC 向け（キーボードかゲームパッド）。スマホのタッチ操作には未対応。'
+    pcOnly: '',
+    tSteer: 'ここをなぞってハンドル', tGas: 'アクセル', tBrake: 'ブレーキ',
+    hintTouch: '左手: なぞってハンドル　右手: アクセル・ブレーキ・NITRO・DRIFT'
   },
   en: {
     tagline: 'Break it. Make your own route.',
@@ -66,7 +68,9 @@ const D = {
     errNotFound: 'Room not found', errStarted: 'Race in progress. Wait for it to finish', errFull: 'Room is full', errName: 'Enter a name', errConn: 'Cannot reach the server',
     noServer: 'Online races need the server build (see README). This page is offline only.',
     toLobby: 'Lobby', waitRematch: 'Waiting for the host', netOn: 'ONLINE', netOff: 'OFFLINE',
-    pcOnly: 'Made for PC (keyboard or gamepad). Touch controls are not supported yet.'
+    pcOnly: '',
+    tSteer: 'Slide here to steer', tGas: 'GAS', tBrake: 'BRAKE',
+    hintTouch: 'Left: slide to steer   Right: gas, brake, NITRO, DRIFT'
   }
 }
 
