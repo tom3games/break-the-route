@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Dela+Gothic+One&family=M+PLUS+1p:wght@500;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <script>
   // 起動に失敗したときに原因を画面に出す（モジュールが読めないと module 内の catch は動かない）
   window.__btrErrors = []
@@ -53,6 +53,7 @@
       </label>
       <div class="carpick" id="carPickShort"></div>
     </div>
+    <div class="carpick stagepick" id="stagePick"></div>
     <div class="btns">
       <button id="btnOffline" class="btn primary" data-t="offline"></button>
       <button id="btnOnline" class="btn" data-t="onlineSoon" disabled></button>
@@ -112,6 +113,7 @@
         <button id="btnLobbyGarage" class="btn ghost small" data-t="garage"></button>
       </div>
       <div class="lobby-row host-only">
+        <div class="carpick stagepick" id="stagePickLobby"></div>
         <label class="field small"><span data-t="cpu"></span><select id="cpuOnline"></select></label>
         <button id="btnStartOnline" class="btn primary" data-t="start"></button>
       </div>
@@ -179,10 +181,11 @@
   </div>
   <div class="hud-br">
     <div class="speed"><b id="hSpeed">0</b><span>km/h</span></div>
-    <div class="boost"><div class="boost-fill" id="hBoost"></div><span id="hBoostLbl">NITRO</span></div>
+    <div class="boost"><div class="boost-fill" id="hBoost"></div><div class="boost-win" id="hBoostWin"></div><span id="hBoostLbl">NITRO</span></div>
   </div>
   <div class="dmg-mini" aria-hidden="true"><i id="hBodyBar"></i></div>
   <div class="center-msg" id="hMsg"></div>
+  <div class="stunt-feed" id="hFeed"></div>
   <div class="count" id="hCount"></div>
   <div class="hint" id="hHint"></div>
   <div class="vignette" id="hVig"></div>
@@ -190,17 +193,20 @@
 
 <!-- スマホの操作 -->
 <section id="touch" class="hidden">
-  <div class="t-steer"><div class="t-knob"></div><span class="t-hint" data-t="tSteer"></span></div>
+  <div class="t-steer">
+    <button data-k="left" class="t-dir" aria-label="left"><svg viewBox="0 0 48 48"><path d="M30 10 16 24l14 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button data-k="right" class="t-dir" aria-label="right"><svg viewBox="0 0 48 48"><path d="M18 10l14 14-14 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
   <div class="t-top">
     <button data-k="respawn" aria-label="respawn"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button data-k="cam" aria-label="camera"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 7l1.5-2.5h5L16 7" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
     <button data-k="pause" aria-label="pause"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg></button>
   </div>
   <div class="t-pedals">
-    <button data-k="drift" class="t-small">DRIFT</button>
-    <button data-k="boost" class="t-small t-boost">NITRO</button>
-    <button data-k="brake" class="t-brake"><span data-t="tBrake"></span></button>
-    <button data-k="gas" class="t-gas"><span data-t="tGas"></span></button>
+    <button data-k="drift" class="t-small" aria-label="drift"><svg viewBox="0 0 48 48"><path d="M12 38c0-10 6-14 14-16s12-6 12-12" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="3 5"/><path d="M8 34c0-10 6-14 14-16s12-6 12-12" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="3 5" opacity=".55"/><rect x="30" y="4" width="12" height="16" rx="3" transform="rotate(30 36 12)" fill="currentColor"/></svg></button>
+    <button data-k="boost" class="t-small t-boost" aria-label="nitro"><svg viewBox="0 0 48 48"><path d="M26 4 12 27h10l-3 17 17-24H26l4-16z" fill="currentColor"/></svg></button>
+    <button data-k="brake" class="t-brake" aria-label="brake"><svg viewBox="0 0 48 48"><rect x="9" y="12" width="30" height="26" rx="5" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M15 20h18M15 25h18M15 30h18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg></button>
+    <button data-k="gas" class="t-gas" aria-label="gas"><svg viewBox="0 0 48 48"><rect x="15" y="6" width="18" height="34" rx="5" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M20 13h8M20 18h8M20 23h8M20 28h8M20 33h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M24 46v-4" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg></button>
   </div>
 </section>
 
@@ -232,6 +238,6 @@
   </div>
 </section>
 
-<script type="module" src="js/main.js?v=3"></script>
+<script type="module" src="js/main.js?v=4"></script>
 </body>
 </html>

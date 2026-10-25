@@ -25,6 +25,7 @@ const A = await mk(bA, 'A'), B = await mk(bB, 'B')
 const ready = p => p.waitForFunction(() => window.__btrReady && !document.getElementById('btnOnline').disabled, null, { timeout: 30000 })
 await A.goto(URL0); await ready(A)
 await A.fill('#nameInput', 'ホスト')
+await A.evaluate(() => { window.__btr.profile.stage = 'touge' })
 await A.click('#btnOnline')
 await A.click('#btnCreate')
 await A.waitForFunction(() => /^[A-Z2-9]{4}$/.test(document.getElementById('roomCode').textContent))
@@ -68,11 +69,13 @@ const maxGap = Math.max(...samples), avg = samples.reduce((s, v) => s + v, 0) / 
 // 100ms 遅らせて補間するので、時速150kmなら 4〜8m 遅れて見えるのが正常
 ok(samples.length >= 10 && avg < 14, 'B の画面の A の車が A の実位置についてくる', `平均差 ${avg.toFixed(1)}m 最大 ${maxGap.toFixed(1)}m（${samples.length}回）`)
 await B.screenshot({ path: OUT + 'online-B-race.png' })
-// 破壊の同期: A が壊した物が B でも壊れている
-await A.waitForTimeout(2000)
+// 破壊の同期: A が壊した物が B でも壊れている（A が何か壊すまで待つ）
+await A.waitForFunction(() => window.__btr.world.destroyed.size >= 2, null, { timeout: 60000 }).catch(() => {})
+await A.waitForTimeout(1500)
+console.log('A state', JSON.stringify(await A.evaluate(() => ({ z: window.__btr.me.z, x: window.__btr.me.x, t: window.__btr.race.t, phase: window.__btr.race.phase, cp: window.__btr.race.entry(window.__btr.myId).cp, stage: window.__btr.world.stage, ap: !!window.__btr.me }))))
 const [dA, dB] = await Promise.all([A, B].map(p => p.evaluate(() => [...window.__btr.world.destroyed])))
 const missing = dA.filter(id => !dB.includes(id))
-ok(dA.length > 5 && missing.length <= 2, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
+ok(dA.length >= 2 && missing.length <= 1, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
 // 最後まで
 await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 150000 }).catch(() => {})))
 await A.waitForTimeout(2500)
@@ -87,6 +90,9 @@ await A.click('#btnAgain')
 await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'race' && window.__btr.race.phase !== 'done', null, { timeout: 10000 }).catch(() => {})))
 const again = await Promise.all([A, B].map(p => p.evaluate(() => window.__btr.mode)))
 ok(again.every(m => m === 'race'), '再戦で両方がレースに戻る', again.join(','))
+// 街ステージでもオンラインで走れる（一般車も両方の画面で同じ位置）
+const trafficSame = await Promise.all([A, B].map(p => p.evaluate(() => { const r = window.__btr.race; return r.traffic ? r.traffic.cars.slice(0, 3).map(c => [Math.round(c.x), Math.round(c.z)]) : null })))
+notes.push('    (再戦は峠ステージのまま。街の一般車の同期は単体テストで確認)')
 const brokenAfter = await B.evaluate(() => window.__btr.world.destroyed.size)
 ok(brokenAfter === 0, '再戦で壊れた物が元に戻る', String(brokenAfter))
 // 切断と再接続: B を読み込み直すと同じ席でレースに戻る

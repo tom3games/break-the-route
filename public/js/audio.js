@@ -124,6 +124,7 @@ export class Audio {
   }
   land(power = 1) { this._tone({ freq: 90, to: 40, dur: 0.25, gain: Math.min(0.9, 0.3 + power * 0.04) }); this._burst({ freq: 500, dur: 0.2, gain: 0.25, decay: 0.2 }) }
   boostStart() { this._burst({ freq: 600, type: 'bandpass', q: 0.7, dur: 0.5, gain: 0.4, decay: 0.45 }); this._tone({ freq: 180, to: 520, dur: 0.35, gain: 0.12, type: 'sawtooth' }) }
+  horn() { for (const f of [392, 494]) this._tone({ freq: f, to: f, dur: 0.38, gain: 0.07, type: 'square' }) }
   beep(high = false) { this._tone({ freq: high ? 1320 : 660, to: high ? 1320 : 660, dur: high ? 0.6 : 0.22, gain: 0.25, type: 'square' }) }
   cp() { this._tone({ freq: 880, to: 880, dur: 0.1, gain: 0.18, type: 'square' }); this._tone({ freq: 1320, to: 1320, dur: 0.18, gain: 0.18, type: 'square', when: 0.1 }) }
   ui() { this._tone({ freq: 700, to: 900, dur: 0.06, gain: 0.08, type: 'square' }) }

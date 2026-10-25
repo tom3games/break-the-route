@@ -3,8 +3,9 @@
 
 import { GAME, REWARD } from './config.js'
 import { createCar, step, respawn, speedOf } from './physics.js'
-import { crossedGate, progressOf } from './track.js'
+import { crossedGate, progressOf, gateAt, totalGates } from './track.js'
 import { createDriver, drive, planRoute } from './ai.js'
+import { createTraffic } from './traffic.js'
 
 export const BOT_NAMES = ['ガンテツ', 'ミサキ', 'BOLT', 'タツミ', 'ROOK', 'ヒバナ', 'VEGA']
 const BOT_CARS = ['bruiser', 'dart', 'runner', 'bruiser', 'dart', 'runner', 'runner']
@@ -24,6 +25,7 @@ export class Race {
     this.phase = 'countdown'
     this.firstFinish = null
     this.events = []      // 画面向け: { t:'cp'|'finish'|'break', id, ... }
+    this.traffic = world.trafficLoops ? createTraffic(world) : null
   }
 
   // humans: [{ id, name, carId, levels, paint, remote }]。remote=true の車はここで動かさない（通信で位置が来る）
@@ -45,6 +47,7 @@ export class Race {
       const bold = boldness ?? (0.15 + this.rng() * 0.75)
       const plan = planRoute(this.world, this.rng, bold)
       const driver = createDriver(this.world, car, plan, 0.75 + this.rng() * 0.25)
+      driver.aggr = this.rng() < 0.45 ? 0.6 + this.rng() * 0.4 : 0 // 半分くらいは体当たりしてくる
       this.entries.push({ id, car, bot: true, remote: false, driver, cp: 0, finished: false, time: null, dnf: false, left: false, px: car.x, pz: car.z })
     }
   }
@@ -61,34 +64,70 @@ export class Race {
       else return
     }
     if (this.phase === 'done') return
-    const cars = this.cars()
+    if (this.traffic) this.traffic.update(this.t, dt)
+    const cars = this.traffic ? [...this.cars(), ...this.traffic.cars.filter(t => t.knocked <= 0)] : this.cars()
+    // CPU の追い上げ・手加減: 一番前の人間との差で ±10% まで性能を変える（いつも競り合いになる）
+    const humans = this.entries.filter(e => !e.bot && !e.left)
+    if (humans.length) {
+      const lead = Math.max(...humans.map(e => this.progress(e)))
+      for (const e of this.entries) if (e.bot) {
+        const diff = this.progress(e) - lead
+        e.car.rb = Math.max(0.9, Math.min(1.1, 1 - diff * 0.6))
+      }
+    }
     for (const e of this.entries) {
       if (e.remote || e.left) continue
       const c = e.car
-      const inp = e.bot ? drive(e.driver, this.world) : (inputs[e.id] || {})
+      const inp = e.bot ? drive(e.driver, this.world, cars) : (inputs[e.id] || {})
       if (e.finished) { // ゴール後は惰性で止まる
         step(c, { brake: 0.4 }, dt, this.world, null)
       } else step(c, inp, dt, this.world, cars)
+      // 体当たりで相手を大破させた（2秒以内に当てていた）ら、当てた側の手柄
+      for (const ev of c.events) if (ev.t === 'wreck' && c.lastHitBy && c.t - c.lastHitAt < 2) {
+        const by = this.entry(c.lastHitBy)
+        if (by) { by.takedowns = (by.takedowns || 0) + 1; by.car.boost = Math.min(1, by.car.boost + 0.35); by.car.boostLock = false; this.events.push({ t: 'takedown', id: by.id, victim: e.id }) }
+      }
       this.observe(e, c.x, c.z)
+      // 一般車に当てたら吹き飛ばす（ニトロが少し戻る）
+      if (this.traffic) {
+        const h = this.traffic.hitBy(c)
+        if (h) { c.boost = Math.min(1, c.boost + 0.05); this.events.push({ t: 'smash', id: e.id, x: h.car.x, y: h.car.y, z: h.car.z, rel: h.rel }) }
+      }
+      // すれすれ追い越し: 当たらずに 3m 以内を速く抜けるとニトロ（人間だけ）
+      if (!e.bot && c.grounded && !c.wreck) for (const o of cars) {
+        if (o === c || o.wreck) continue
+        const d = Math.hypot(o.x - c.x, o.z - c.z)
+        const rel = Math.hypot(c.vx - o.vx, c.vz - o.vz)
+        const key = 'nm_' + o.id
+        if (d < 3.4 && d > 2.45 && rel > 9 && !(c[key] > c.t)) {
+          c[key] = c.t + 2.5
+          c.boost = Math.min(1, c.boost + 0.08)
+          this.events.push({ t: 'nearmiss', id: e.id, traffic: !!o.traffic })
+        }
+      }
     }
     this.checkOver()
   }
 
   // 位置を見てゲート通過を判定する。オンラインのサーバーは、人間の車の位置が届くたびにここを呼ぶ
   observe(e, x, z, clientTime = null) {
-    const g = this.world.gates[e.cp]
-    if (!e.finished && g && this.phase === 'racing' && crossedGate(g, e.px, e.pz, x, z)) {
+    const g = gateAt(this.world, e.cp)
+    const tc = !e.finished && this.phase === 'racing' ? crossedGate(g, e.px, e.pz, x, z) : -1
+    if (tc >= 0) {
       e.cp++
       e.car.respawnPoint = { ...g.respawn }
-      if (e.cp >= this.world.gates.length) {
+      if (e.cp >= totalGates(this.world)) {
         e.finished = true
         // 時刻は線を横切った瞬間に補間する
-        const frac = (g.z - e.pz) / ((z - e.pz) || 1)
-        const t = clientTime != null ? Math.min(clientTime, this.t) : this.t - GAME.step * (1 - frac)
+        const t = clientTime != null ? Math.min(clientTime, this.t) : this.t - GAME.step * (1 - tc)
         e.time = Math.max(0, t)
         if (this.firstFinish == null) this.firstFinish = this.t
         this.events.push({ t: 'finish', id: e.id, time: e.time })
-      } else this.events.push({ t: 'cp', id: e.id, cp: e.cp, name: g.name })
+      } else {
+        const n = this.world.gates.length, laps = this.world.laps || 1
+        const lapDone = laps > 1 && e.cp % n === 0
+        this.events.push({ t: 'cp', id: e.id, cp: e.cp, name: lapDone ? `LAP ${e.cp / n + 1}/${laps}` : g.name })
+      }
     }
     e.px = x; e.pz = z
   }
@@ -129,11 +168,11 @@ export class Race {
     return this.standings().map((e, i) => {
       const c = e.car
       let credits = e.finished ? REWARD.place[i] + REWARD.finish : REWARD.dnf
-      credits += Math.min(REWARD.breakCap, c.breaks * REWARD.perBreak)
+      credits += Math.min(REWARD.breakCap, c.breaks * REWARD.perBreak) + (e.takedowns || 0) * REWARD.takedown
       return {
         id: e.id, name: c.name, bot: e.bot, place: i + 1, time: e.time, finished: e.finished,
         dnf: e.dnf, left: e.left, cp: e.cp, breaks: c.breaks, maxAir: Math.round(c.maxAir * 10) / 10,
-        body: Math.round(c.dmg.body * 100), credits, carId: c.carId
+        body: Math.round(c.dmg.body * 100), credits, carId: c.carId, takedowns: e.takedowns || 0
       }
     })
   }

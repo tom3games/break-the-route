@@ -7,7 +7,11 @@ import { GLTFLoader } from '../vendor/jsm/loaders/GLTFLoader.js'
 const SHAPES = {
   runner:  { W: 0.98, L: 2.2, H: 0.86, hood: 0.38, cabF: 0.55, cabR: -0.95, track: 0.82, wing: true, bar: false, haunch: 1.04 },
   bruiser: { W: 1.06, L: 2.3, H: 1.04, hood: 0.5, cabF: 0.65, cabR: -1.15, track: 0.9, wing: false, bar: true, haunch: 1.03 },
-  dart:    { W: 0.94, L: 2.1, H: 0.76, hood: 0.32, cabF: 0.45, cabR: -0.85, track: 0.79, wing: true, bar: false, haunch: 1.07 }
+  dart:    { W: 0.94, L: 2.1, H: 0.76, hood: 0.32, cabF: 0.45, cabR: -0.85, track: 0.79, wing: true, bar: false, haunch: 1.07 },
+  // 一般車
+  sedan:   { W: 0.92, L: 2.25, H: 0.98, hood: 0.36, cabF: 0.75, cabR: -1.25, track: 0.8, wing: false, bar: false, haunch: 1.0 },
+  van:     { W: 1.0, L: 2.35, H: 1.55, hood: 0.5, cabF: 1.55, cabR: -2.2, track: 0.86, wing: false, bar: false, haunch: 1.0 },
+  taxi:    { W: 0.92, L: 2.25, H: 0.98, hood: 0.36, cabF: 0.75, cabR: -1.25, track: 0.8, wing: false, bar: false, haunch: 1.0, sign: true }
 }
 
 const WHEEL_R = 0.36, WHEEL_Z = 1.35
@@ -218,6 +222,7 @@ export class ProcCar {
     for (const [k, sx] of [['mirrorL', 1], ['mirrorR', -1]]) {
       const m = add(new THREE.BoxGeometry(0.12, 0.08, 0.16), this.paintMat); m.position.set(sx * (S.W * 0.97 + 0.07), S.hood + 0.12, S.cabF - 0.05); P[k] = m
     }
+    if (S.sign) { const sg = add(new THREE.BoxGeometry(0.5, 0.18, 0.22), new THREE.MeshStandardMaterial({ color: 0xffe08a, emissive: 0xffc040, emissiveIntensity: 0.6 }), false); sg.position.set(0, S.H + 0.1, S.cabR + (S.cabF - S.cabR) * 0.5) }
     this.parts = P
     this.lost = new Set()
 

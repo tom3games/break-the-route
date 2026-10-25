@@ -211,11 +211,11 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 6px; margin-right: 3p
 #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; user-select: none; -webkit-user-select: none; touch-action: none; }
 #touch button { pointer-events: auto; touch-action: none; -webkit-touch-callout: none; font-family: var(--f-num); font-weight: 700; color: #fff; border: 2px solid rgba(255,255,255,0.35); background: rgba(20,22,26,0.42); backdrop-filter: blur(2px); }
 #touch button.on { background: rgba(255,90,31,0.75); border-color: #fff; }
-.t-steer { position: absolute; left: 0; bottom: 0; width: 44vw; height: 62vh; pointer-events: auto; touch-action: none; }
-.t-knob { position: absolute; left: 22%; top: 70%; width: 86px; height: 86px; margin: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,0.45); background: rgba(255,255,255,0.12); transform: translate(-50%, -50%); }
-.t-knob::after { content: ''; position: absolute; inset: 26px; border-radius: 50%; background: rgba(255,255,255,0.75); }
-.t-knob.on { border-color: #fff; background: rgba(255,90,31,0.3); }
-.t-hint { position: absolute; left: max(12px, env(safe-area-inset-left)); bottom: max(6px, env(safe-area-inset-bottom)); font-size: 11px; color: rgba(255,255,255,0.75); white-space: nowrap; text-shadow: 0 1px 3px #000; }
+.t-steer { position: absolute; left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom)); display: flex; gap: 12px; pointer-events: none; }
+.t-dir { width: 96px; height: 96px; border-radius: 22px; padding: 18px; }
+.t-dir svg, .t-pedals svg { width: 100%; height: 100%; display: block; pointer-events: none; }
+.t-pedals button { padding: 10px; }
+.t-pedals .t-gas { padding: 14px; }
 .t-top { position: absolute; top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); display: flex; gap: 8px; }
 .t-top button { width: 44px; height: 44px; border-radius: 10px; padding: 9px; }
 .t-top svg { width: 100%; height: 100%; display: block; }
@@ -227,8 +227,9 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 6px; margin-right: 3p
 .t-pedals .t-gas.on { background: rgba(54,195,122,0.8); }
 /* 縦持ち: 下の帯に並べる */
 @media (orientation: portrait) {
-  .t-steer { width: 50vw; height: 34vh; }
-  .t-pedals { grid-template-columns: 74px 92px; grid-template-rows: 50px 100px; }
+  .t-dir { width: 80px; height: 80px; padding: 16px; }
+  .t-steer { gap: 8px; }
+  .t-pedals { grid-template-columns: 70px 84px; grid-template-rows: 54px 92px; }
 }
 /* タッチ端末では HUD を詰める */
 body.touch .hud-bl { display: none; }
@@ -267,3 +268,52 @@ body.touch .dmg-mini { display: block; }
   .foot { margin-top: 4px; }
   .note { margin: 2px 0 0; font-size: 11px; }
 }
+/* 画面の高さはブラウザのバーで変わるので dvh で測る */
+.panel { max-height: calc(100dvh - 24px); }
+.title-card { max-height: calc(100dvh - 16px); overflow-y: auto; scrollbar-width: none; }
+.title-card::-webkit-scrollbar { display: none; }
+/* さらに低い横画面（iPhone の横持ちでバーが出ている状態 320〜380px） */
+@media (max-height: 380px) {
+  #title { padding-top: 6px; padding-bottom: 6px; align-items: flex-start; }
+  .logo { font-size: 26px; }
+  .story, .note:empty { display: none; }
+  .field > span { display: none; }
+  .field-row { gap: 8px; }
+  .field input, .field select { padding: 4px 8px; font-size: 14px; }
+  .carpick button { padding: 6px 4px; font-size: 11px; }
+  .btn { min-height: 34px; font-size: 13px; padding: 0 12px; }
+  .btns { margin-top: 4px; }
+  .foot { margin-top: 2px; gap: 12px; }
+  .link { padding: 2px 0; font-size: 12px; }
+  .screen { padding: 8px; }
+  .panel { padding: 12px 14px; }
+}
+/* タッチ: 小地図は横持ちなら左上（時間の下）、縦持ちなら右上 */
+body.touch #miniMap { display: block; }
+@media (orientation: landscape) {
+  body.touch #miniMap { top: 88px; left: max(10px, env(safe-area-inset-left)); right: auto; width: 92px; height: 92px; }
+}
+@media (orientation: landscape) and (max-height: 340px) {
+  body.touch #miniMap { width: 72px; height: 72px; }
+  .t-pedals { grid-template-columns: 76px 90px; grid-template-rows: 50px 96px; gap: 8px; }
+  .t-dir { width: 84px; height: 84px; padding: 16px; }
+}
+@media (orientation: landscape) { body.touch #miniMap { top: 104px; } }
+
+/* パーフェクトニトロの押し直しの窓（ニトロを入れた直後だけ出る） */
+.boost-win { position: absolute; top: 0; bottom: 0; width: 14%; right: 6%; background: rgba(255,60,40,0.0); border-left: 2px solid transparent; border-right: 2px solid transparent; transition: background .05s; }
+.boost-win.show { border-color: #ff3b30; background: rgba(255,60,40,0.25); }
+.boost-win.hot { background: rgba(255,215,0,0.9); border-color: #fff; }
+.boost.perfect .boost-fill { background: linear-gradient(90deg, #ffb020, #fff2a0); }
+.boost.perfect { box-shadow: 0 0 22px rgba(255,200,40,0.9); }
+/* 技・ノックダウンの小さな表示（右側に積む） */
+.stunt-feed { position: absolute; right: 18px; top: 38%; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; pointer-events: none; }
+.stunt-feed div { font-family: var(--f-num); font-weight: 700; font-size: 20px; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,0.7); animation: feed 1.6s ease-out forwards; }
+.stunt-feed div b { color: #7fd4ff; margin-left: 6px; font-size: 15px; }
+@keyframes feed { 0% { transform: translateX(30px); opacity: 0 } 12% { transform: none; opacity: 1 } 80% { opacity: 1 } 100% { opacity: 0; transform: translateY(-10px) } }
+body.touch .stunt-feed { top: 30%; right: 50%; transform: translateX(50%); align-items: center; }
+body.touch .stunt-feed div { font-size: 16px; }
+
+.stagepick { margin: 0 0 10px; }
+.stagepick button { font-family: var(--f-body); font-size: 12.5px; letter-spacing: 0; }
+@media (max-height: 380px) { .stagepick { margin-bottom: 4px; } .stagepick button { padding: 5px 4px; font-size: 11px; } }

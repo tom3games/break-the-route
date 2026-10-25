@@ -7,14 +7,15 @@
 //   3. 大峡谷      A 西を大回り(修理ピットあり) / D 東の崖っぷち林道(テクニカル) / E 崩れた橋を飛ぶ(要ブースト・落ちたら谷底)
 //   4. 丘と崖      A 東の外周(修理ピットあり) / D 西の山道ヘアピン / B+E 鉱山道を突破して崖から飛び降りる(高リスク)
 
-import { DESTRUCT, PHYS, SURFACE } from './config.js'
+import { DESTRUCT, PHYS, SURFACE, GAME } from './config.js'
+import { buildCity, cityTerrain } from './city.js'
 
 export const FALL_SEC = 1.6  // 鉄塔が倒れ切るまで
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t) }
 const lerp = (a, b, t) => a + (b - a) * t
 
 // ---------------------------------------------------------------- 地形
-export const BOUNDS = { x0: -305, x1: 235, z0: -60, z1: 1215 }
+export const BOUNDS = { x0: -305, x1: 235, z0: -60, z1: 2330 }
 export const CANYON = { x0: -230, x1: 150, z0: 660, z1: 760, floor: -70, wall: 6 }
 const HILL = { x0: -50, x1: 50, z0: 910, z1: 1045, top: 20, slope: 40, cliff: 2 }
 
@@ -30,7 +31,11 @@ function noise(x, z) {
   return Math.sin(x * 0.11 + z * 0.07) * 0.35 + Math.sin(x * 0.043 - z * 0.061 + 1.7) * 0.5 + Math.sin(z * 0.19 + x * 0.02) * 0.12
 }
 
-export function terrain(x, z) {
+// いま描いているステージの地形（画面側が使う）。サーバーは部屋ごとに world.terrain を使う
+let currentTerrain = null
+export function terrain(x, z) { return (currentTerrain || tougeTerrain)(x, z) }
+
+function tougeTerrain(x, z) {
   let h = baseHeight(z)
   // 峡谷
   const c = CANYON
@@ -45,6 +50,11 @@ export function terrain(x, z) {
   const dzN = Math.max(z - H.z1, 0)
   const hm = (1 - sstep(0, H.slope, Math.hypot(dx, dzS))) * (1 - sstep(0, H.cliff, dzN))
   if (hm > 0) h += H.top * hm
+  // 峠の山（区間5で登り、区間6で下る）。道の通る真ん中だけ少し低い（峠）
+  if (z > 1240 && z < 2220) {
+    const t = (z - 1240) / (2220 - 1240)
+    h += Math.pow(Math.sin(Math.PI * t), 1.15) * 78 * (1 - 0.22 * Math.exp(-((x / 140) ** 2)))
+  }
   // 区間3と4の野原は少し波打たせる（市街と工業地帯は平ら）
   if (z > 640 && m < 0.5) h += noise(x, z) * sstep(640, 700, z) * (1 - m * 2)
   // 外周の山
@@ -53,6 +63,20 @@ export function terrain(x, z) {
   const o = ox + oz
   if (o > 0) h += Math.pow(Math.min(1, o / 70), 1.4) * 70 + noise(x * 2, z * 2) * Math.min(1, o / 20) * 4
   return h
+}
+
+// 林の濃さ（木の配置と、地面の落ち葉の量に使う）
+export function forestDensity(x, z) {
+  const n = Math.sin(x * 0.021 + 1.3) * Math.cos(z * 0.017) + Math.sin(x * 0.051 - z * 0.033) * 0.6 + Math.sin((x + z) * 0.009) * 0.5
+  const d = Math.max(0, Math.min(1, (n + 0.55) / 1.4))
+  return z > 1240 ? Math.min(1, d + 0.35) : d // 峠は杉林が濃い
+}
+
+function segDist(x, z, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az, L = dx * dx + dz * dz
+  let t = L ? ((x - ax) * dx + (z - az) * dz) / L : 0
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(x - (ax + dx * t), z - (az + dz * t))
 }
 
 // ---------------------------------------------------------------- コースのデータ
@@ -99,20 +123,12 @@ function build() {
   box(-12, -60, 12, -52, 4, 'wall')
 
   // B の封鎖: 入口と出口に仮設フェンスとバリケード、中に木材の山とコーン
-  rowX('tempfence', -5, 5, 137.5, 3.4)
-  rowX('barricade', -5.2, 5.2, 141, 3.5)
   prop('sign', -9.2, 134, 0); prop('sign', 9.2, 134, 0)
-  prop('lumber', -3, 178, 0.1); prop('lumber', 3.5, 212, -0.2); prop('lumber', -3.5, 248, 0.15); prop('lumber', 2.8, 270, 0)
-  for (let z = 155; z < 296; z += 13) prop('cone', ((z * 37) % 9) - 4.5, z)
-  box(-7, 192, -0.5, 197, 2.6, 'container'); box(0.5, 228, 7, 233, 2.6, 'container'); box(-7, 258, -0.5, 263, 2.6, 'container')
-  rowX('barricade', -5.2, 5.2, 292, 3.5)
-  rowX('tempfence', -5, 5, 298, 3.4)
   // 大通り沿いの街灯と看板（壊せる演出）
   for (let z = 10; z <= 110; z += 25) { prop('lamp', -9.5, z); prop('lamp', 9.5, z) }
   for (let z = 150; z <= 290; z += 28) prop('lamp', -86.5, z)
   prop('sign', -86.8, 200, Math.PI / 2); prop('sign', 37.5, 160, Math.PI / 2)
   // 路地の角のゴミ箱代わりのコーン
-  prop('cone', 33, 176); prop('cone', 61, 243); prop('cone', 36, 243)
 
   // ======================================== 区間2 工業地帯 (z 330..625)
   road([[0, 360], [0, 400]], 16)
@@ -150,12 +166,11 @@ function build() {
   box(-110, 576, -12, 612, 9, 'building'); box(12, 576, 44, 600, 7, 'building')
   for (const [x, z] of [[46, 405], [46, 420], [88, 380], [86, 560]]) box(x - 1.3, z - 6, x + 1.3, z + 6, 2.6, 'container')
   for (let z = 410; z <= 560; z += 30) prop('lamp', -70.5, z)
-  rowZ('barricade', -54, 404, 404, 1)
 
   // 建設途中の高架。取り付け → 高架1 → 板のジャンプ台 → 36m の切れ目 → 高架2 → 降り
   slabs.push({ cx: 56, cz: 381, yaw: 0, hw: 6, hl: 19, y0: 0, y1: 8, thick: 1.2, surf: 'road', solid: true, kind: 'ramp' })
   slabs.push({ cx: 56, cz: 426, yaw: 0, hw: 6, hl: 26, y0: 8, y1: 8, thick: 1.4, surf: 'road', solid: true, kind: 'deck' })
-  slabs.push({ cx: 53.5, cz: 448, yaw: 0, hw: 3.5, hl: 4, y0: 8, y1: 9.8, thick: 0.4, surf: 'wood', solid: true, kind: 'kicker' })
+  slabs.push({ cx: 54, cz: 448, yaw: 0, hw: 3.85, hl: 4, y0: 8, y1: 9.8, thick: 0.4, surf: 'wood', solid: true, kind: 'kicker' })
   slabs.push({ cx: 56, cz: 519, yaw: 0, hw: 6, hl: 31, y0: 7, y1: 7, thick: 1.4, surf: 'road', solid: true, kind: 'deck' })
   slabs.push({ cx: 56, cz: 570, yaw: 0, hw: 6, hl: 20, y0: 7, y1: 0, thick: 1.2, surf: 'road', solid: true, kind: 'ramp' })
   for (const sx of [49.6, 62.4]) { box(sx - 0.3, 362, sx + 0.3, 400, 9, 'sidewall'); box(sx - 0.3, 550, sx + 0.3, 590, 8, 'sidewall') }
@@ -201,7 +216,6 @@ function build() {
   boxes.push({ cx: -120, cz: 790, yaw: 0, hw: 112, hl: 0.25, y0: -4, h: 0.9, kind: 'rail' })
   boxes.push({ cx: 79, cz: 790, yaw: 0, hw: 71, hl: 0.25, y0: -4, h: 0.9, kind: 'rail' })
   prop('sign', -10, 646, 0); prop('sign', 10, 646, 0)
-  rowX('barricade', -5.2, 5.2, 652, 3.5)
   // 林道の岩
   for (const [x, z, r] of [[160, 670, 3], [180, 690, 2.5], [158, 720, 3], [192, 740, 3], [162, 760, 2.5], [188, 790, 3]])
     boxes.push({ cx: x, cz: z, yaw: x * 0.3, hw: r, hl: r * 0.8, y0: -2, h: r * 1.6, kind: 'rock' })
@@ -211,15 +225,32 @@ function build() {
   road([[0, 860], [0, 872], [110, 892], [145, 925], [148, 990], [125, 1065], [50, 1112], [0, 1130]], 14)   // A 東外周
   road([[0, 860], [-70, 876], [-98, 918], [-76, 948], [-100, 982], [-78, 1016], [-98, 1054], [-55, 1100], [0, 1130]], 8)  // D 山道
   road([[0, 872], [0, 1046]], 9, 'dirt')                  // B 鉱山道（丘を直登）
-  road([[0, 1060], [0, 1215]], 16)                        // 町の通り
+  road([[0, 1060], [0, 1262]], 16)                        // 町の通り
+
+  // ======================================== 区間5 峠の登り (z 1170..1750) と 区間6 下り (..2270)
+  // 本道は九十九折り。旧街道（中山道のような細い石と土の道）は真っすぐ登るが狭く、本道と何度も交差する
+  const TOUGE_UP = [[0, 1262], [40, 1276], [150, 1300], [168, 1318], [160, 1338], [120, 1350], [-150, 1380], [-168, 1398], [-160, 1418], [-120, 1430],
+    [150, 1460], [168, 1478], [160, 1498], [120, 1510], [-140, 1545], [-158, 1563], [-150, 1583], [-110, 1595], [120, 1625], [136, 1643], [128, 1663], [90, 1675], [-50, 1698], [-68, 1708], [-62, 1724], [-30, 1738], [0, 1750]]
+  const OLD_ROAD = [[0, 1262], [-42, 1288], [12, 1318], [-58, 1352], [6, 1392], [-62, 1428], [2, 1468], [-58, 1508], [6, 1548], [-54, 1588], [6, 1628], [-48, 1668], [2, 1702], [-24, 1728], [0, 1750]]
+  const TOUGE_DOWN = [[0, 1750], [20, 1770], [90, 1800], [110, 1830], [60, 1870], [-60, 1900], [-110, 1935], [-80, 1975], [40, 2005], [100, 2040], [70, 2085], [-40, 2110],
+    [-80, 2150], [-40, 2190], [0, 2210], [0, 2330]]
+  road(TOUGE_UP, 10)
+  road(OLD_ROAD, 6, 'dirt')
+  road(TOUGE_DOWN, 10)
+  labels.push({ x: 160, z: 1400, t: 'A' }, { x: -30, z: 1500, t: 'D' }, { x: 100, z: 1950, t: 'A' })
+  repair.push({ x0: 175, z0: 1450, x1: 200, z1: 1490, name: 'PIT 4' })
+  // 峠の茶屋（見た目）と頂上の看板
+  box(-40, 1752, -24, 1764, 5, 'building'); box(24, 1736, 40, 1746, 4, 'building')
+  prop('sign', 12, 1745, 0.6); prop('sign', -12, 1756, 0.6)
+  // ゴールの村
+  for (const [x0, z0, x1, z1] of [[-70, 2235, -14, 2262], [-70, 2278, -14, 2310], [14, 2235, 70, 2262], [14, 2278, 70, 2310]])
+    box(x0, z0, x1, z1, 7 + ((bi++ * 7919) % 3) * 3, 'building')
+  for (let z = 2230; z <= 2310; z += 20) { prop('lamp', -10, z); prop('lamp', 10, z) }
   road([[-60, 1100], [60, 1100]], 10)
   labels.push({ x: 128, z: 990, t: 'A' }, { x: 0, z: 980, t: 'B/E' }, { x: -112, z: 990, t: 'D' })
   repair.push({ x0: 156, z0: 935, x1: 180, z1: 985, name: 'PIT 3' })
   // 鉱山道の封鎖と障害
-  rowX('fence', -4, 4, 884, 4)
   prop('sign', -6.5, 880, 0); prop('sign', 6.5, 880, 0)
-  prop('lumber', -2.5, 940, 0.3); prop('lumber', 2.5, 985, -0.2)
-  rowX('barricade', -3.5, 3.5, 1015, 3.5)
   // 崖の縁: 壊せるガードレールと板のジャンプ台、町の土砂の山（降り坂で着地すると軽傷）
   rowX('guardrail', -18, 18, 1043.5, 4)
   slabs.push({ cx: 0, cz: 1038, yaw: 0, hw: 4, hl: 4, y0: 20, y1: 21.6, thick: 0.4, surf: 'wood', solid: true, kind: 'kicker' })
@@ -235,23 +266,89 @@ function build() {
   box(BOUNDS.x1, BOUNDS.z0, BOUNDS.x1 + 10, BOUNDS.z1, 40, 'bound')
   box(BOUNDS.x0, BOUNDS.z1, BOUNDS.x1, BOUNDS.z1 + 10, 40, 'bound')
 
-  // 木（見た目だけ。道の上には置かない）
-  let seed = 7
-  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
-  for (let i = 0; i < 700; i++) {
-    const x = lerp(BOUNDS.x0 - 40, BOUNDS.x1 + 40, rnd()), z = lerp(620, BOUNDS.z1 + 40, rnd())
-    decor.push({ kind: 'tree', x, z, s: 0.8 + rnd() * 0.8 })
-  }
 
   // チェックポイント（全部 z 一定の線。どのルートを通っても必ず横切る）
   const gates = [
     { z: 330, x0: -110, x1: 100, name: 'CP1', respawn: { x: 0, z: 338, yaw: 0 } },
     { z: 625, x0: -110, x1: 95, name: 'CP2', respawn: { x: 0, z: 588, yaw: 0 } },
     { z: 850, x0: BOUNDS.x0, x1: BOUNDS.x1, name: 'CP3', respawn: { x: 0, z: 856, yaw: 0 } },
-    { z: 1170, x0: BOUNDS.x0, x1: BOUNDS.x1, name: 'GOAL', respawn: { x: 0, z: 1175, yaw: 0 } }
+    { z: 1170, x0: BOUNDS.x0, x1: BOUNDS.x1, name: 'CP4', respawn: { x: 0, z: 1175, yaw: 0 } },
+    { z: 1750, x0: BOUNDS.x0, x1: BOUNDS.x1, name: 'CP5', respawn: { x: 6, z: 1756, yaw: 0.75 } },
+    { z: 2270, x0: BOUNDS.x0, x1: BOUNDS.x1, name: 'GOAL', respawn: { x: 0, z: 2275, yaw: 0 } }
   ]
   const grid = []
   for (let i = 0; i < 8; i++) grid.push({ x: i % 2 ? 3.6 : -3.6, z: 2 - Math.floor(i / 2) * 9, yaw: 0 })
+
+  // ---------------- ジャンプ台（道の片側に寄せて置く。避けても乗ってもいい）
+  // roll: 1/-1 は曲がった台（飛ぶと横に回る＝バレルロール）。0 は普通の台（ドリフトしながら飛ぶと水平に回る）
+  const kicker = (x, z, dx, dz, roll = 0, len = 9, rise = 1.7, hw = 3.2) => {
+    const l = Math.hypot(dx, dz); dx /= l; dz /= l
+    const g0 = terrain(x - dx * len / 2, z - dz * len / 2), g1 = terrain(x + dx * len / 2, z + dz * len / 2)
+    slabs.push({ cx: x, cz: z, yaw: Math.atan2(dx, dz), hw, hl: len / 2, y0: g0 + 0.02, y1: g1 + rise, thick: 0.4, surf: 'wood', solid: true, kind: roll ? 'roll' : 'kicker', roll })
+  }
+  kicker(-4.5, 62, 0, 1, 1)                 // スタート直後の大通り（左車線）
+  kicker(3.5, 205, 0, 1, 0)                 // 区間1 B（封鎖道路はもう開いている）
+  kicker(-3.5, 262, 0, 1, -1)
+  kicker(-66, 482, 0, 1, 1)                 // 区間2 A の迂回路
+  kicker(-120, 636, -1, 0, -1)              // 区間3 A 谷の南の縁（西向き）
+  kicker(-150, 804, 1, 0, 1)                // 区間3 A 北の縁（東向き）
+  kicker(150, 955, 0.05, 1, 0, 10, 2.2)     // 区間4 A 東の外周
+  kicker(-30, 1897, -1, 0.25, 1)            // 峠の下り
+  kicker(70, 2022, 0.85, 0.5, -1)
+  kicker(-62, 2135, -0.5, 0.75, 0)
+
+  // ---------------- 道沿いのガードレール（区間3〜6の舗装路）。壊すと道の外へ出られる（近道・崖下り）
+  const allSegs = []
+  roads.forEach((r, ri) => { for (let i = 0; i < r.pts.length - 1; i++) allSegs.push({ ri, i, ax: r.pts[i][0], az: r.pts[i][1], bx: r.pts[i + 1][0], bz: r.pts[i + 1][1], hw: r.w / 2 }) })
+  const onSlab = (x, z) => slabs.some(sl => { const q = toLocal(sl, x, z); return Math.abs(q.u) < sl.hw + 1 && Math.abs(q.v) < sl.hl + 1 })
+  roads.forEach((r, ri) => {
+    if (r.surf !== 'road') return
+    for (let i = 0; i < r.pts.length - 1; i++) {
+      const [ax, az] = r.pts[i], [bx, bz] = r.pts[i + 1]
+      const L = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / L, dz = (bz - az) / L
+      for (let d = 3; d < L - 1; d += 4.2) {
+        const cx = ax + dx * d, cz = az + dz * d
+        if (cz < 640 || (cz > 1050 && cz < 1262) || cz > 2225) continue // 市街・町・村には付けない
+        for (const side of [-1, 1]) {
+          const off = r.w / 2 + 0.9
+          const x = cx - dz * off * side, z = cz + dx * off * side
+          if (terrain(x, z) < -3 || onSlab(x, z)) continue
+          // 他の道（交差点・分かれ道・九十九折りの内側）にかかるなら付けない
+          let blocked = false
+          for (const s of allSegs) {
+            if (s.ri === ri && s.i === i) continue
+            // 同じ道の隣の区間（曲がり角）は、路面にかかるときだけ外す。外側のレールは残す
+            const margin = s.ri === ri ? 0.4 : 2.2
+            if (segDist(x, z, s.ax, s.az, s.bx, s.bz) < s.hw + margin) { blocked = true; break }
+          }
+          if (blocked) continue
+          props.push({ type: 'guardrail', x, z, yaw: Math.atan2(-dz, dx), rail: true })
+        }
+      }
+    }
+  })
+
+  // ---------------- 林（当たり判定あり。道・建物・ピットの近くには生やさない）
+  const trees = []
+  {
+    let seed = 11
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+    const SP = 8
+    for (let z = 640; z < BOUNDS.z1; z += SP) for (let x = BOUNDS.x0 + 4; x < BOUNDS.x1 - 4; x += SP) {
+      const px = x + (rnd() - 0.5) * SP * 0.9, pz = z + (rnd() - 0.5) * SP * 0.9
+      const s = 0.75 + rnd() * 0.65, r = rnd() * 6.28, keep = rnd()
+      if (pz > 1050 && pz < 1240) continue
+      if (keep > forestDensity(px, pz) * 0.95) continue
+      const h = terrain(px, pz)
+      if (h < -2.5) continue
+      if (allSegs.some(sg => segDist(px, pz, sg.ax, sg.az, sg.bx, sg.bz) < sg.hw + 3.5)) continue
+      if (boxes.some(o => Math.abs(px - o.cx) < o.hw + 3 && Math.abs(pz - o.cz) < o.hl + 3)) continue
+      if (repair.some(q => px > q.x0 - 4 && px < q.x1 + 4 && pz > q.z0 - 4 && pz < q.z1 + 4)) continue
+      if (onSlab(px, pz)) continue
+      trees.push({ x: px, y: h, z: pz, s, r })
+    }
+    for (const t of trees) boxes.push({ cx: t.x, cz: t.z, yaw: 0, hw: 0.45, hl: 0.45, y0: t.y - 1, h: 22, kind: 'tree' })
+  }
 
   // CPU の走行線。区間ごとにルートを選ぶ。need: 'boost' はブーストを溜めてから入る / risk は挑む確率の目安
   const routes = [
@@ -273,11 +370,18 @@ function build() {
     [ // 区間4
       { id: 'A', risk: 0, pts: [[0, 858], [0, 868], [20, 875], [105, 890], [140, 920], [148, 990], [125, 1065], [50, 1112], [10, 1128], [0, 1140], [0, 1190]] },
       { id: 'D', risk: 0.3, pts: [[0, 858], [-20, 864], [-70, 876], [-98, 918], [-76, 948], [-100, 982], [-78, 1016], [-98, 1054], [-55, 1100], [-10, 1128], [0, 1140], [0, 1190]] },
-      { id: 'BE', risk: 0.7, pts: [[0, 858], [0, 900], [2.5, 925], [2.5, 945], [0, 965], [-2.5, 980], [-2.5, 992], [0, 1010], [0, 1046], [0, 1092], [0, 1140], [0, 1190]] }
+      { id: 'BE', risk: 0.7, pts: [[0, 858], [0, 900], [0, 1046], [0, 1092], [0, 1140], [0, 1190]] }
+    ],
+    [ // 区間5 峠の登り
+      { id: 'A', risk: 0, pts: [[0, 1190], ...TOUGE_UP, [10, 1760]] },
+      { id: 'D', risk: 0.5, pts: [[0, 1190], ...OLD_ROAD, [10, 1760]] }
+    ],
+    [ // 区間6 峠の下り
+      { id: 'A', risk: 0, pts: [[10, 1760], ...TOUGE_DOWN.slice(1, -1), [0, 2290]] }
     ]
   ]
 
-  return { roads, slabs, boxes, props, dirt, repair, decor, gates, grid, labels, routes }
+  return { roads, slabs, boxes, props, dirt, repair, decor, gates, grid, labels, routes, trees }
 }
 
 // ---------------------------------------------------------------- 空間の索引
@@ -322,10 +426,18 @@ export function slabTop(sl, v) {
 }
 
 // ---------------------------------------------------------------- 世界
-export function createWorld() {
-  const T = build()
+export function createWorld(stage = 'touge') {
+  const city = stage === 'city'
+  const T = city ? buildCity() : build()
+  currentTerrain = city ? cityTerrain : tougeTerrain
   const w = {
     ...T,
+    stage: city ? 'city' : 'touge',
+    terrain: city ? cityTerrain : tougeTerrain,
+    bounds: T.bounds || BOUNDS,
+    fallY: T.fallY ?? GAME.fallY,
+    gates: normalizeGates(T.gates),
+    laps: T.laps || 1,
     destroyed: new Set(),      // 壊れた物の id
     destroyedAt: new Map(),    // id -> 壊れたレース時刻
     time: 0,                   // レース時刻（倒れる物の判定に使う）
@@ -363,7 +475,7 @@ export function createWorld() {
   T.props.forEach((p, i) => {
     const d = DESTRUCT[p.type]
     const id = `${p.type}${i}`
-    const y = p.y ?? terrain(p.x, p.z)
+    const y = p.y ?? w.terrain(p.x, p.z)
     const o = { id, type: p.type, cx: p.x, cz: p.z, yaw: p.yaw || 0, hw: d.w / 2, hl: d.l / 2, y0: y, y1: y + d.h, def: d }
     w.objects.push(o)
     w.colGrid.add(o, ...obbAabb(o, 1))
@@ -379,17 +491,17 @@ export function createWorld() {
 
   // 地面の高さと路面。yHint より stepUp 以上高い板は「頭上」なので無視する
   w.groundAt = (x, z, yHint = 1e9) => {
-    let h = terrain(x, z)
-    let surf = null
+    let h = w.terrain(x, z)
+    let surf = null, slab = null
     for (const sl of w.slabGrid.at(x, z)) {
       if (!w.slabActive(sl)) continue
       const p = toLocal(sl, x, z)
       if (Math.abs(p.u) > sl.hw || Math.abs(p.v) > sl.hl) continue
       const top = slabTop(sl, p.v)
-      if (top > h && top <= yHint + PHYS.stepUp) { h = top; surf = sl.surf }
+      if (top > h && top <= yHint + PHYS.stepUp) { h = top; surf = sl.surf; slab = sl }
     }
     if (!surf) surf = w.surfaceAt(x, z)
-    return { h, surf }
+    return { h, surf, slab }
   }
 
   w.surfaceAt = (x, z) => {
@@ -399,7 +511,7 @@ export function createWorld() {
     }
     if (best) return best
     for (const d of T.dirt) if (x >= d.x0 && x <= d.x1 && z >= d.z0 && z <= d.z1) return 'dirt'
-    return z < 625 ? 'dirt' : 'grass'
+    return T.ground ? T.ground(x, z) : z < 625 ? 'dirt' : 'grass'
   }
 
   w.inRepair = (x, z) => T.repair.find(r => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) || null
@@ -421,18 +533,39 @@ export function distSeg(x, z, s) {
 
 export function surfaceDef(name) { return SURFACE[name] || SURFACE.grass }
 
-// レースの進み具合（順位付け用）。最後に通ったゲートの番号と、次のゲートまでの近さ
-export function progressOf(world, cp, z) {
-  const prevZ = cp > 0 ? world.gates[cp - 1].z : world.grid[7].z
-  const next = world.gates[Math.min(cp, world.gates.length - 1)]
-  const f = Math.max(0, Math.min(1, (z - prevZ) / (next.z - prevZ)))
-  return cp + f * 0.999
+// ---------------------------------------------------------------- チェックポイント
+// ゲートは線分 a-b。nx,nz があればその向きに横切ったときだけ数える。周回コースは gates を laps 回くり返す
+export function normalizeGates(gates) {
+  return gates.map(g => {
+    if (g.a) {
+      const cx = (g.a.x + g.b.x) / 2, cz = (g.a.z + g.b.z) / 2
+      return { ...g, cx, cz, len: Math.hypot(g.b.x - g.a.x, g.b.z - g.a.z) }
+    }
+    // 旧形式 { z, x0, x1 }（南から北へ）
+    const a = { x: g.x0, z: g.z }, b = { x: g.x1, z: g.z }
+    return { ...g, a, b, nx: 0, nz: 1, cx: g.respawn.x, cz: g.z, len: g.x1 - g.x0 }
+  })
+}
+export const totalGates = world => world.gates.length * (world.laps || 1)
+export const gateAt = (world, cp) => world.gates[((cp % world.gates.length) + world.gates.length) % world.gates.length]
+
+// 移動した線分がゲートを横切ったか。横切ったら線分上の位置 0..1、そうでなければ -1
+export function crossedGate(g, x0, z0, x1, z1) {
+  if (g.nx != null && (x1 - x0) * g.nx + (z1 - z0) * g.nz <= 0) return -1
+  const ax = g.a.x, az = g.a.z, bx = g.b.x, bz = g.b.z
+  const d = (x1 - x0) * (bz - az) - (z1 - z0) * (bx - ax)
+  if (Math.abs(d) < 1e-9) return -1
+  const t = ((ax - x0) * (bz - az) - (az - z0) * (bx - ax)) / d
+  const u = ((ax - x0) * (z1 - z0) - (az - z0) * (x1 - x0)) / d
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : -1
 }
 
-// 移動した線分がゲートを横切ったか（南から北へ）
-export function crossedGate(g, x0, z0, x1, z1) {
-  if (!(z0 < g.z && z1 >= g.z)) return false
-  const t = (g.z - z0) / (z1 - z0)
-  const x = x0 + (x1 - x0) * t
-  return x >= g.x0 && x <= g.x1
+// レースの進み具合（順位付け用）: 通ったゲートの数 + 次のゲートへの近さ
+export function progressOf(world, cp, x, z) {
+  const prev = cp > 0 ? gateAt(world, cp - 1) : null
+  const px = prev ? prev.cx : world.grid[0].x, pz = prev ? prev.cz : world.grid[0].z
+  const next = gateAt(world, Math.min(cp, totalGates(world) - 1))
+  const L = Math.max(1, Math.hypot(next.cx - px, next.cz - pz))
+  const f = Math.max(0, Math.min(1, 1 - Math.hypot(next.cx - x, next.cz - z) / L))
+  return cp + f * 0.999
 }

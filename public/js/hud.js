@@ -1,6 +1,7 @@
 // レース中の表示（順位・時間・進み具合・損傷・速度・ブースト・小地図）
 import { GAME, CARS } from '../shared/config.js'
 import { speedOf } from '../shared/physics.js'
+import { gateAt, totalGates } from '../shared/track.js'
 import { t, placeText } from './i18n.js'
 
 const $ = id => document.getElementById(id)
@@ -25,13 +26,16 @@ export class HUD {
   setup(race, me) {
     this.race = race; this.me = me
     const tr = $('hTrack'); tr.innerHTML = ''
-    const n = this.world.gates.length
-    this.world.gates.forEach((g, i) => {
+    const n = totalGates(this.world), per = this.world.gates.length
+    for (let i = 0; i < n; i++) {
+      const g = gateAt(this.world, i)
       const d = document.createElement('div'); d.className = 'cp'
       d.style.left = ((i + 1) / n * 100) + '%'
-      d.innerHTML = `<span>${g.name}</span>`
+      // 周回コースは各周の終わりだけ名前を出す
+      const label = this.world.laps > 1 ? ((i + 1) % per === 0 ? (i + 1 === n ? 'GOAL' : 'LAP ' + ((i + 1) / per + 1)) : '') : g.name
+      d.innerHTML = `<span>${label}</span>`
       tr.appendChild(d)
-    })
+    }
     this.dots = new Map()
     race.entries.forEach((e, i) => {
       const d = document.createElement('div'); d.className = 'dot' + (e.car === me ? ' me' : '')
@@ -58,6 +62,16 @@ export class HUD {
   }
   toast(text) { this.hint(text, 1.6) }
   hint(text, dur = 4) { const el = $('hHint'); el.textContent = text; el.classList.add('show'); this.hintT = dur }
+  // 技やノックダウンを右に積んで流す
+  feed(text, sub = '') {
+    const box = $('hFeed')
+    const d = document.createElement('div')
+    d.textContent = text
+    if (sub) { const b = document.createElement('b'); b.textContent = sub; d.appendChild(b) }
+    box.appendChild(d)
+    while (box.children.length > 4) box.firstChild.remove()
+    setTimeout(() => d.remove(), 1700)
+  }
   flashDamage(d) { this.vig = Math.min(1, this.vig + d * 4 + 0.15) }
 
   update(race, me, dt, camera) {
@@ -85,15 +99,18 @@ export class HUD {
     $('hPosOf').textContent = placeText(myPlace).replace(/^\d+/, '') + ' /' + st.length
 
     // 次のゲート
-    const g = W.gates[Math.min(myE.cp, W.gates.length - 1)]
-    $('hNext').textContent = myE.finished ? t('goal') : `${t('nextCp')} ${g.name}  ${Math.max(0, Math.round(g.z - me.z))}m`
+    const tot = totalGates(W)
+    const g = gateAt(W, Math.min(myE.cp, tot - 1))
+    const lap = W.laps > 1 ? `LAP ${Math.min(W.laps, Math.floor(myE.cp / W.gates.length) + 1)}/${W.laps}  ` : ''
+    const gname = myE.cp === tot - 1 ? 'GOAL' : g.name
+    $('hNext').textContent = myE.finished ? t('goal') : `${lap}${t('nextCp')} ${gname}  ${Math.round(Math.hypot(g.cx - me.x, g.cz - me.z))}m`
 
     // 進み具合（全員）
     for (const e of race.entries) {
       const d = this.dots.get(e.id)
       if (!d) continue
-      const p = Math.min(W.gates.length, race.progress(e))
-      d.style.left = (Math.min(1, p / W.gates.length) * 100) + '%'
+      const p = Math.min(totalGates(W), race.progress(e))
+      d.style.left = (Math.min(1, p / totalGates(W)) * 100) + '%'
       d.style.opacity = e.left ? 0.25 : 1
     }
 
@@ -105,7 +122,7 @@ export class HUD {
       st.forEach((e, i) => {
         const li = document.createElement('li')
         if (e.car === me) li.className = 'me'
-        const status = e.finished ? fmt(e.time) : e.left ? t('left') : e.car.wreck > 0 ? t('msgWreck') : (W.gates[e.cp] ? W.gates[e.cp].name : '')
+        const status = e.finished ? fmt(e.time) : e.left ? t('left') : e.car.wreck > 0 ? t('msgWreck') : (W.laps > 1 ? 'L' + (Math.floor(e.cp / W.gates.length) + 1) + ' ' : '') + gateAt(W, e.cp).name
         li.innerHTML = `<span>${i + 1}</span><span class="sw" style="background:${e.color}"></span><span class="nm"></span><span class="st">${status}</span>`
         li.querySelector('.nm').textContent = e.car.name
         ol.appendChild(li)
@@ -119,6 +136,11 @@ export class HUD {
     const box = bEl.parentElement
     box.classList.toggle('lock', me.boostLock || me.overheat)
     box.classList.toggle('on', me.boosting)
+    box.classList.toggle('perfect', !!(me.boosting && me.perfect))
+    const since = me.boostStart != null ? me.t - me.boostStart : 99
+    const win = $('hBoostWin')
+    win.classList.toggle('show', me.boosting && !me.perfect && since < 0.8)
+    win.classList.toggle('hot', me.boosting && !me.perfect && since >= 0.45 && since <= 0.8)
     $('hBoostLbl').textContent = me.overheat ? t('msgOverheat') : me.boostLock ? t('recharge') : 'NITRO'
 
     // 損傷
@@ -185,9 +207,9 @@ export class HUD {
     for (const r of W.repair) g.fillRect(-r.x1, -r.z1, r.x1 - r.x0, r.z1 - r.z0)
     // 次のゲート
     const e = race.entries.find(en => en.car === me)
-    const gt = W.gates[Math.min(e.cp, W.gates.length - 1)]
+    const gt = gateAt(W, Math.min(e.cp, totalGates(W) - 1))
     g.strokeStyle = '#ffb020'; g.lineWidth = 4 / sc
-    g.beginPath(); g.moveTo(-gt.x0, -gt.z); g.lineTo(-gt.x1, -gt.z); g.stroke()
+    g.beginPath(); g.moveTo(-gt.a.x, -gt.a.z); g.lineTo(-gt.b.x, -gt.b.z); g.stroke()
     // 車
     for (const en of race.entries) {
       const c = en.car
@@ -240,7 +262,7 @@ export function drawFullMap(cv, W) {
   g.fillStyle = 'rgba(0,0,0,0.5)'
   for (const o of W.colliders) if (o.kind === 'building' || o.kind === 'whouse') g.fillRect(o.cx - o.hw, o.cz - o.hl - z0, o.hw * 2, o.hl * 2)
   g.strokeStyle = '#ffb020'; g.lineWidth = 3 / sc
-  for (const gt of W.gates) { g.beginPath(); g.moveTo(gt.x0, gt.z - z0); g.lineTo(gt.x1, gt.z - z0); g.stroke() }
+  for (const gt of W.gates) { g.beginPath(); g.moveTo(gt.a.x, gt.a.z - z0); g.lineTo(gt.b.x, gt.b.z - z0); g.stroke() }
   g.restore()
   // ルート名
   g.font = 'bold 12px "Chakra Petch", sans-serif'
@@ -251,6 +273,6 @@ export function drawFullMap(cv, W) {
     g.fillStyle = '#14161a'; g.beginPath(); g.arc(px, py, 9, 0, Math.PI * 2); g.fill()
     g.fillStyle = '#f2c230'; g.fillText(l.t, px, py + 4)
   }
-  for (const gt of W.gates) { const [px, py] = P(gt.x1 - 20, gt.z); g.fillStyle = '#ffb020'; g.textAlign = 'right'; g.fillText(gt.name, px, py - 4) }
+  for (const gt of W.gates) { const [px, py] = P(gt.cx, gt.cz); g.fillStyle = '#ffb020'; g.textAlign = 'center'; g.fillText(gt.name, px, py - 6) }
   const [sx, sy] = P(0, 0); g.fillStyle = '#36c37a'; g.textAlign = 'center'; g.fillText('START', sx, sy + 2)
 }

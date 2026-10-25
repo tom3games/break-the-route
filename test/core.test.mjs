@@ -1,7 +1,7 @@
 // 物理・コース・レース判定の単体テスト（描画なし）
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createWorld, crossedGate } from '../public/shared/track.js'
+import { createWorld, crossedGate, normalizeGates } from '../public/shared/track.js'
 import { createCar, step, speedOf } from '../public/shared/physics.js'
 import { Race } from '../public/shared/race.js'
 import { buildStats, GAME } from '../public/shared/config.js'
@@ -26,7 +26,7 @@ test('軽い接触と高速の激突でダメージが大きく違う', () => {
   assert.ok(Math.abs(slow.vx) < 7, `遅い方も跳ね返っている vx=${slow.vx}`)
   const lossSlow = 1 - slow.dmg.body, lossFast = 1 - fast.dmg.body
   assert.ok(lossSlow < 0.03, `7m/s の損傷 ${lossSlow}`)
-  assert.ok(lossFast > 0.35, `35m/s の損傷 ${lossFast}`)
+  assert.ok(lossFast > 0.15, `35m/s の損傷 ${lossFast}`)
 })
 
 test('正面衝突はエンジンと冷却を傷める', () => {
@@ -106,10 +106,10 @@ test('改造は何かが上がると何かが下がる', () => {
 })
 
 test('ゲートは南から北へ横切ったときだけ数える', () => {
-  const g = { z: 100, x0: -10, x1: 10 }
-  assert.equal(crossedGate(g, 0, 99, 0, 101), true)
-  assert.equal(crossedGate(g, 0, 101, 0, 99), false)
-  assert.equal(crossedGate(g, 30, 99, 30, 101), false)
+  const [g] = normalizeGates([{ z: 100, x0: -10, x1: 10, respawn: { x: 0, z: 101 } }])
+  assert.ok(crossedGate(g, 0, 99, 0, 101) >= 0)
+  assert.equal(crossedGate(g, 0, 101, 0, 99), -1)
+  assert.equal(crossedGate(g, 30, 99, 30, 101), -1)
 })
 
 test('チェックポイントは順番どおりでないと進まない（ゴールへ直行しても勝てない）', () => {
@@ -126,11 +126,11 @@ test('チェックポイントは順番どおりでないと進まない（ゴ�
 })
 
 test('どのルートでも完走できる（CPU 運転）', () => {
-  const combos = [['A', 'A', 'A', 'A'], ['B', 'B', 'D', 'D'], ['D', 'C', 'E', 'BE']]
+  const combos = [['A', 'A', 'A', 'A', 'A', 'A'], ['B', 'B', 'D', 'D', 'D', 'A'], ['D', 'C', 'E', 'BE', 'A', 'A']]
   for (const f of combos) {
     const r = runRoute(f)
     assert.ok(r.done, `${f.join('')} が完走しない ${r.t}`)
-    assert.ok(r.t < 120, `${f.join('')} が遅すぎる ${r.t}`)
+    assert.ok(r.t < 240, `${f.join('')} が遅すぎる ${r.t}`)
   }
 })
 

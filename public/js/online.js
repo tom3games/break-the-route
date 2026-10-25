@@ -36,8 +36,8 @@ export class Online {
   create(name, car) { this.open(); this.pendingCar = car; this.send({ t: 'create', name }) }
   join(code, name, car) { this.open(); this.pendingCar = car; this.send({ t: 'join', code, name }) }
   setCar(car) { this.send({ t: 'car', car }) }
-  start(cpu) { this.send({ t: 'start', opts: { cpu } }) }
-  rematch(cpu) { this.send({ t: 'rematch', opts: { cpu } }) }
+  start(cpu, stage) { this.send({ t: 'start', opts: { cpu, stage } }) }
+  rematch(cpu, stage) { this.send({ t: 'rematch', opts: { cpu, stage } }) }
   toLobby() { this.send({ t: 'lobby' }) }
   leave() { this.send({ t: 'leave' }); this.room = null; this.endSession() }
 

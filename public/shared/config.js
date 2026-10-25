@@ -9,7 +9,8 @@ export const GAME = {
   countdownSec: 4,
   finishGraceSec: 45,            // 1位がゴールしてから締め切るまで
   respawnFreezeSec: 1.2,         // 手動リスポーンの停止時間
-  wreckRespawnSec: 2.0,          // 大破してから戻るまで
+  wreckRespawnSec: 1.3,          // 大破してから戻るまで
+  knockSec: 1.1,                 // 体当たりで倒されてから戻るまで
   wreckRepairTo: 0.55,           // 大破から戻ったときの各部位の下限
   fallY: -32,                    // これより下は落下扱い
   step: 1 / 60,                  // 物理の固定ステップ
@@ -27,7 +28,7 @@ export const PHYS = {
   aeroDrag: 0.00045,
   rolling: 0.9,
   airRate: 2.6,         // 空中の姿勢変化の速さ（rad/s）
-  safeLand: 12,         // これより遅い着地は無傷（m/s, 面の法線方向）
+  safeLand: 14,         // これより遅い着地は無傷（m/s, 面の法線方向）
   maxPlausibleSpeed: 95 // サーバーの瞬間移動チェック（m/s）
 }
 
@@ -43,15 +44,15 @@ export const SURFACE = {
 export const CARS = {
   runner: {
     name: 'RUNNER', nameJa: 'ランナー', desc: '癖のない基準車', descEn: 'Balanced all-rounder',
-    mass: 1.0, maxSpeed: 46, accel: 19, grip: 7.5, steer: 2.3, durability: 1.0, boost: 1.0, air: 1.0, color: 0xe8432e
+    mass: 1.0, maxSpeed: 46, accel: 19, grip: 9.0, steer: 2.3, durability: 1.0, boost: 1.0, air: 1.0, color: 0xe8432e
   },
   bruiser: {
     name: 'BRUISER', nameJa: 'ブルーザー', desc: '重くて硬い。壁を割りやすい', descEn: 'Heavy and tough. Smashes walls',
-    mass: 1.35, maxSpeed: 44, accel: 16.5, grip: 7.0, steer: 2.0, durability: 1.55, boost: 1.05, air: 0.8, color: 0x2f7fe0
+    mass: 1.35, maxSpeed: 44, accel: 16.5, grip: 8.4, steer: 2.05, durability: 1.55, boost: 1.05, air: 0.8, color: 0x2f7fe0
   },
   dart: {
     name: 'DART', nameJa: 'ダート', desc: '軽くて速い。壊れやすい', descEn: 'Light and quick. Fragile',
-    mass: 0.8, maxSpeed: 48, accel: 21, grip: 8.0, steer: 2.5, durability: 0.7, boost: 1.0, air: 1.3, color: 0xf2c230
+    mass: 0.8, maxSpeed: 48, accel: 21, grip: 9.4, steer: 2.5, durability: 0.7, boost: 1.0, air: 1.3, color: 0xf2c230
   }
 }
 
@@ -83,18 +84,20 @@ export const DESTRUCT = {
   sign:      { breakAt: 5,  absorb: 0.05, hard: 0.4, debris: 5,  color: 0x2e8bd8, w: 2.4, l: 0.4, h: 2.6 },
   lamp:      { breakAt: 9,  absorb: 0.08, hard: 0.7, debris: 4,  color: 0x6d7480, w: 0.5, l: 0.5, h: 6.5 },
   lumber:    { breakAt: 19, absorb: 0.25, hard: 1.1, debris: 12, color: 0xc4904f, w: 3.2, l: 2.2, h: 1.6 },
-  guardrail: { breakAt: 17, absorb: 0.15, hard: 1.0, debris: 4,  color: 0xc9ced6, w: 4.0, l: 0.4, h: 0.9 },
+  guardrail: { breakAt: 13, absorb: 0.12, hard: 0.9, debris: 4,  color: 0xc9ced6, w: 4.2, l: 0.4, h: 0.9 },
   wall:      { breakAt: 31, absorb: 0.42, hard: 1.6, debris: 22, color: 0xa65a3f, w: 16,  l: 1.2, h: 6.0 },
+  parked:    { breakAt: 15, absorb: 0.22, hard: 0.9, debris: 6,  color: 0x6d7480, w: 1.9, l: 4.3, h: 1.4 },
+  signal:    { breakAt: 9,  absorb: 0.08, hard: 0.7, debris: 4,  color: 0x2b2e33, w: 0.5, l: 0.5, h: 5.2 },
   tower:     { breakAt: 14, absorb: 0.18, hard: 0.9, debris: 8,  color: 0xe0a020, w: 1.6, l: 1.6, h: 48 }
 }
 
 // ダメージの係数
 export const DAMAGE = {
-  wallBase: 0.0065,     // 壁衝突: (法線速度-4)^1.3 * これ * 硬さ
-  wallFree: 4,
-  landBase: 0.0075,
+  wallBase: 0.0032,     // 壁衝突: (法線速度-7)^1.3 * これ * 硬さ（2026-10-26 本人「すぐ壊れる」で半分に）
+  wallFree: 7,
+  landBase: 0.0045,
   boostMul: 1.35,       // ブースト中の衝突は重い
-  carHit: 0.25          // 車同士は軽め
+  carHit: 0.35          // 車同士
 }
 
 // 報酬（ゲーム内通貨）。保存は各プレイヤーのブラウザ
@@ -103,7 +106,8 @@ export const REWARD = {
   finish: 100,
   perBreak: 8,
   breakCap: 240,
-  dnf: 80
+  dnf: 80,
+  takedown: 120
 }
 
 // 車種と改造レベルから実際の性能値を作る。サーバーでも同じ関数で作るので画面からの値は信じない

@@ -96,6 +96,21 @@ if (script === 'fx') {
   const fps = await page.evaluate(() => new Promise(r => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 < 2000) requestAnimationFrame(f); else r(n / 2) }; requestAnimationFrame(f) }))
   console.log('fps', fps)
 }
+if (script === 'city') {
+  await page.evaluate(() => { const b = window.__btr; b.profile.stage = 'city' })
+  await page.click('#btnOffline')
+  await page.waitForTimeout(1200)
+  await page.screenshot({ path: OUT + 'city-start.png' })
+  await page.waitForTimeout(4000)
+  const spots = [['avenue', 0, 250, 0, 30], ['downtown', 0, 450, 0, 25], ['bridge', 160, 420, Math.PI, 38], ['park', -40, 430, 0.3, 0], ['plaza', 40, 530, 0.5, 0], ['parking', -170, 240, Math.PI / 2, 0], ['site', 150, 470, 1.2, 0], ['traffic', -120, 120, Math.PI / 2, 20], ['canal', -60, 300, 0.4, 0]]
+  for (const [n, x, z, yaw, sp] of spots) {
+    await page.evaluate(([x, z, yaw, sp]) => { window.__btr.setPaused(false); window.__btr.teleport(x, z, yaw, sp) }, [x, z, yaw, sp])
+    await page.waitForTimeout(sp ? 900 : 600)
+    await page.evaluate(() => window.__btr.setPaused(true))
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: OUT + 'city-' + n + '.png' })
+  }
+}
 const info = await page.evaluate(() => ({ calls: window.__btr.renderer.info.render.calls, tris: window.__btr.renderer.info.render.triangles, mode: window.__btr.mode, broken: [...window.__btr.world.destroyed].length }))
 console.log(JSON.stringify(info))
 console.log(errs.slice(0, 30).join('\n') || 'no errors')

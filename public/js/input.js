@@ -36,8 +36,15 @@ export class Input {
     const inp = { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false, pitch: 0, roll: 0, respawn: false }
     if (this.any('up')) inp.throttle = 1
     if (this.any('down')) inp.brake = 1
-    if (this.any('left')) inp.steer -= 1
-    if (this.any('right')) inp.steer += 1
+    let ks = 0
+    const TS = this.touch && this.touch.active ? this.touch.state : null
+    if (this.any('left') || (TS && TS.left)) ks -= 1
+    if (this.any('right') || (TS && TS.right)) ks += 1
+    // キーは一気に全開にせず、0.15秒ほどかけて切る（戻すときは速く）
+    const now = performance.now(), dt = Math.min(0.05, (now - (this.lastT || now)) / 1000); this.lastT = now
+    const rate = ks === 0 || Math.sign(ks) !== Math.sign(this.ks || 0) ? 12 : 6.5
+    this.ks = (this.ks || 0) + Math.max(-rate * dt, Math.min(rate * dt, ks - (this.ks || 0)))
+    inp.steer = Math.abs(this.ks) < 0.02 ? 0 : this.ks
     inp.handbrake = this.any('drift')
     inp.boost = this.any('boost')
     inp.respawn = this.hit('respawn')
@@ -51,11 +58,13 @@ export class Input {
     if (T) {
       inp.throttle = Math.max(inp.throttle, T.throttle)
       inp.brake = Math.max(inp.brake, T.brake)
-      if (Math.abs(T.steer) > 0.04) inp.steer = T.steer
+      if (T.brake) inp.throttle = 0 // ブレーキ中はアクセルのスイッチより優先
       if (T.drift) inp.handbrake = true
       if (T.boost) inp.boost = true
-      if (airborne) { if (Math.abs(T.pitch) > 0.1) inp.pitch = T.pitch; if (Math.abs(T.steer) > 0.04) inp.roll = T.steer }
+      if (airborne) inp.roll = inp.steer
     }
+    // NITRO はアクセル込み（スマホで2つ同時に押さなくていい）
+    if (inp.boost) { inp.throttle = 1; inp.brake = 0 }
     // ゲームパッド（標準配置）
     const pads = navigator.getGamepads ? navigator.getGamepads() : []
     for (const p of pads) {

@@ -2,12 +2,12 @@
 // 物理とレース判定は shared/ のものをそのまま使い、ここは描画・入力・音・画面遷移だけを持つ。
 import * as THREE from 'three'
 import { GAME, CARS, UPGRADES, PAINTS, DESTRUCT, buildStats } from '../shared/config.js'
-import { createWorld, FALL_SEC, terrain } from '../shared/track.js'
+import { createWorld, FALL_SEC, terrain, gateAt, totalGates } from '../shared/track.js'
 import { Race, mulberry } from '../shared/race.js'
 import { speedOf } from '../shared/physics.js'
 import { createDriver, drive, planRoute } from '../shared/ai.js'
 import { buildScene, propGeometry } from './scene.js'
-import { CarModel, loadCarModel } from './carmodel.js'
+import { CarModel, ProcCar, loadCarModel } from './carmodel.js'
 import { FX } from './fx.js'
 import { Audio } from './audio.js'
 import { Input } from './input.js'
@@ -60,22 +60,123 @@ loadSky(renderer, scene, sun, dir => {
 })
 const camera = new THREE.PerspectiveCamera(64, 1, 0.3, 2400)
 
-const world = createWorld()
-const built = buildScene(scene, world)
+// ステージ（touge = 峠と峡谷 / city = 湾岸シティ）。選んだものは保存してある
+let world = createWorld(loadProfile().stage === 'city' ? 'city' : 'touge')
+let built = buildScene(scene, world)
 const fx = new FX(scene, world)
 const audio = new Audio()
 const input = new Input()
 const hud = new HUD(world)
 hud.onBeep = () => audio.beep(false)
 
+// ---------------------------------------------------------------- 道案内
+// 車の上の矢印: 今いる区間のルート（A〜E のうち一番近い道）を 30m 先まで辿った点を指す。
+// 近道を選んでも、その道に沿って次のゲートへ案内する
+const makeGuidePaths = () => world.routes.map((opts, si) => opts.map(o => {
+  const out = []
+  for (let i = 0; i < o.pts.length - 1; i++) {
+    const [ax, az] = o.pts[i], [bx, bz] = o.pts[i + 1]
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 4))
+    for (let k = 0; k < n; k++) out.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n])
+  }
+  const g = world.gates[si].respawn
+  out.push([g.x, g.z])
+  return out
+}))
+let guidePaths = makeGuidePaths()
+
+// ステージを切り替える（コースの見た目・壊せる物・案内を作り直す）
+function loadStage(id) {
+  if (world.stage === id) return
+  scene.remove(built.root)
+  built.root.traverse(o => { if (o.geometry) o.geometry.dispose() })
+  world = createWorld(id)
+  built = buildScene(scene, world)
+  fx.world = world
+  hud.world = world
+  guidePaths = makeGuidePaths()
+  if (railIM) { scene.remove(railIM); railIM.dispose(); railIM = null; railIndex.clear() }
+  placeProps()
+}
+const guide = new THREE.Group()
+{
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffc21a, transparent: true, opacity: 0.92, depthTest: false, fog: false })
+  const shape = new THREE.Shape()
+  shape.moveTo(0, 1.1); shape.lineTo(0.95, -0.2); shape.lineTo(0.5, -0.2); shape.lineTo(0.5, -1.0); shape.lineTo(-0.5, -1.0); shape.lineTo(-0.5, -0.2); shape.lineTo(-0.95, -0.2); shape.closePath()
+  const arrow = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.18, bevelEnabled: false }).rotateX(Math.PI / 2), mat)
+  arrow.scale.setScalar(0.34)
+  arrow.renderOrder = 10
+  const edge = new THREE.Mesh(arrow.geometry, new THREE.MeshBasicMaterial({ color: 0x14161a, depthTest: false, fog: false }))
+  edge.scale.setScalar(0.39); edge.position.y = -0.02; edge.renderOrder = 9
+  guide.add(edge, arrow)
+}
+scene.add(guide)
+// 次のゲートの光の柱（霧に消えないので遠くから見える）
+const beacon = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 160, 20, 1, true).translate(0, 80, 0),
+  new THREE.MeshBasicMaterial({ color: 0xff8a1f, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }))
+scene.add(beacon)
+
+function updateGuide(now) {
+  const e = me && race ? race.entry(myId) : null
+  const on = !!(e && mode === 'race' && !e.finished && camMode !== 2)
+  guide.visible = on
+  beacon.visible = !!(e && mode === 'race' && !e.finished)
+  if (!e || e.finished) return
+  const cpi = Math.min(e.cp, totalGates(world) - 1)
+  const si = cpi % world.gates.length
+  const g = gateAt(world, cpi)
+  beacon.position.set(g.cx, world.groundAt(g.cx, g.cz, 60).h, g.cz)
+  beacon.material.color.setHex(cpi === totalGates(world) - 1 ? 0x7dffb0 : 0xff8a1f)
+  beacon.material.opacity = 0.22 + Math.sin(now / 300) * 0.08
+  if (!on) return
+  // 一番近い道の点から 30m 先
+  let best = null, bd = 1e9
+  for (const path of guidePaths[si]) for (let i = 0; i < path.length; i++) {
+    const d = (path[i][0] - me.x) ** 2 + (path[i][1] - me.z) ** 2
+    if (d < bd) { bd = d; best = { path, i } }
+  }
+  const tgt = best.path[Math.min(best.path.length - 1, best.i + 8)]
+  const yaw = Math.atan2(tgt[0] - me.x, tgt[1] - me.z)
+  const m = models.get(myId)
+  const p = m ? m.group.position : me
+  // 車の少し前・上。手前（カメラ側）へ起こして、平たく潰れて見えないようにする
+  guide.position.set(p.x + Math.sin(me.yaw) * 1.2, p.y + 1.75 + Math.sin(now / 260) * 0.06, p.z + Math.cos(me.yaw) * 1.2)
+  guide.rotation.set(0, yaw, 0, 'YXZ')
+  guide.rotateX(-0.55)
+}
+
 // 壊せる物のメッシュ
 const propMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1 })
 const geoCache = {}
 const props = new Map()
+// 道沿いのガードレールは千本以上あるので、まとめて1回で描く（壊れたら、その1本だけ消して実体を飛ばす）
+let railIM = null
+const railIndex = new Map()
+const _rm = new THREE.Matrix4(), _rq = new THREE.Quaternion(), _rs = new THREE.Vector3(1, 1, 1), _rp = new THREE.Vector3()
+function railMatrix(o, visible = true) {
+  _rq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), o.yaw)
+  return _rm.compose(_rp.set(o.cx, o.y0, o.cz), _rq, visible ? _rs.set(1, 1, 1) : _rs.set(0, 0, 0))
+}
+function setRail(id, visible) {
+  const i = railIndex.get(id)
+  if (i == null) return
+  railIM.setMatrixAt(i, railMatrix(world.objectById.get(id), visible))
+  railIM.instanceMatrix.needsUpdate = true
+}
 function placeProps() {
   for (const m of props.values()) m.parent && m.parent.remove(m)
   props.clear()
+  const rails = world.objects.filter(o => o.type === 'guardrail')
+  if (!railIM) {
+    railIM = new THREE.InstancedMesh(propGeometry('guardrail'), propMat, rails.length)
+    railIM.castShadow = true; railIM.receiveShadow = true; railIM.frustumCulled = false
+    scene.add(railIM)
+    rails.forEach((o, i) => railIndex.set(o.id, i))
+  }
+  for (const o of rails) railIM.setMatrixAt(railIndex.get(o.id), railMatrix(o, true))
+  railIM.instanceMatrix.needsUpdate = true
   for (const o of world.objects) {
+    if (o.type === 'guardrail') continue
     const g = geoCache[o.type] || (geoCache[o.type] = propGeometry(o.type))
     const m = new THREE.Mesh(g, propMat)
     m.position.set(o.cx, o.y0, o.cz)
@@ -109,6 +210,7 @@ let online = null       // オンライン対戦中なら Online
 let onlineRace = false  // 今のレースがオンラインか
 let menuOpen = false    // オンライン中のメニュー（止まらない）
 let models = new Map()  // id -> CarModel
+const trafficModels = new Map()
 let paused = false
 let seenBroken = new Set()
 let camMode = 0
@@ -171,6 +273,13 @@ function startRace({ demo = false, view = null } = {}) {
     scene.add(m.group)
     models.set(e.id, m)
   }
+  // 一般車（街だけ）。軽い手続きの車で描く
+  for (const m of trafficModels.values()) { scene.remove(m.group); m.dispose() }
+  trafficModels.clear()
+  if (race.traffic) for (const c of race.traffic.cars) {
+    const m = new ProcCar(c.kind, c.color)
+    scene.add(m.group); trafficModels.set(c.id, m)
+  }
   follow = me || race.entries[0].car
   doneAt = null
   paused = false
@@ -203,6 +312,7 @@ function toTitle() {
 
 function beginPlayerRace() {
   audio.start()
+  loadStage(profile.stage)
   profile.name = ($('nameInput').value || '').trim().slice(0, 12)
   saveProfile(profile)
   mode = 'race'
@@ -245,6 +355,20 @@ function renderCarPick() {
   }
 }
 renderCarPick()
+function renderStagePick() {
+  for (const box of [$('stagePick'), $('stagePickLobby')]) {
+    if (!box) continue
+    box.innerHTML = ''
+    for (const id of ['city', 'touge']) {
+      const b = document.createElement('button')
+      b.textContent = t(id === 'city' ? 'stageCity' : 'stageTouge')
+      b.className = profile.stage === id ? 'on' : ''
+      b.onclick = () => { profile.stage = id; saveProfile(profile); renderStagePick(); audio.start(); audio.ui(); if (mode !== 'race') { loadStage(id); startRace({ demo: true }) } }
+      box.appendChild(b)
+    }
+  }
+}
+renderStagePick()
 $('btnOffline').onclick = beginPlayerRace
 $('btnGarage').onclick = () => { audio.start(); audio.ui(); returnTo = 'title'; show('garage') }
 $('btnHowto').onclick = () => { audio.start(); audio.ui(); returnTo = 'title'; show('howto') }
@@ -281,7 +405,7 @@ input.onKey = code => {
 // 結果
 $('btnAgain').onclick = () => {
   audio.ui()
-  if (onlineRace && online && online.room) { if (online.room.hostId === online.you) online.rematch(Number($('cpuOnline').value)); return }
+  if (onlineRace && online && online.room) { if (online.room.hostId === online.you) online.rematch(Number($('cpuOnline').value), profile.stage); return }
   beginPlayerRace()
 }
 $('btnRGarage').onclick = () => {
@@ -301,7 +425,7 @@ function showResults(list = null) {
     const tr = document.createElement('tr')
     if (r.id === myId) tr.className = 'me'
     const st = r.finished ? fmtTime(r.time) : r.left ? t('left') : t('dnf')
-    tr.innerHTML = `<td class="n">${r.place}</td><td><b></b> <span class="s">${CARS[r.carId].name}</span></td><td class="s">${t('breaks')} ${r.breaks} / ${t('air')} ${r.maxAir}s / ${t('body')} ${r.body}%</td><td class="t">${st}</td>`
+    tr.innerHTML = `<td class="n">${r.place}</td><td><b></b> <span class="s">${CARS[r.carId].name}</span></td><td class="s">${t('breaks')} ${r.breaks} / ${t('air')} ${r.maxAir}s${r.takedowns ? ' / TAKEDOWN ' + r.takedowns : ''} / ${t('body')} ${r.body}%</td><td class="t">${st}</td>`
     tr.querySelector('b').textContent = r.name
     body.appendChild(tr)
     setTimeout(() => tr.classList.add('in'), 250 + i * 160)
@@ -416,7 +540,14 @@ function renderPreview() {
 // ---------------------------------------------------------------- 破壊の演出
 function breakVisual(id, info) {
   const o = world.objectById.get(id)
-  const m = props.get(id)
+  let m = props.get(id)
+  if (o && o.type === 'guardrail') {
+    // 束から1本消して、同じ形の実体を作って飛ばす
+    setRail(id, false)
+    m = new THREE.Mesh(geoCache.guardrail || (geoCache.guardrail = propGeometry('guardrail')), propMat)
+    m.position.set(o.cx, o.y0, o.cz); m.rotation.y = o.yaw; m.castShadow = true
+    scene.add(m)
+  }
   if (!o || !m) return
   const d = DESTRUCT[o.type]
   const dir = info ? { x: info.dx || 0, z: info.dz || 0 } : { x: 0, z: 8 }
@@ -486,7 +617,12 @@ function handleEvents(e) {
         break
       }
       case 'scrape': if (mine) { audio.scrape(); fx.sparks(c.x, c.y, c.z, 3) } break
-      case 'carhit': if (vol) audio.crash(0.4 * vol); fx.sparks(c.x, c.y + 0.3, c.z, 8); if (mine) fx.addShake(0.3); break
+      case 'carhit':
+        if (vol) audio.crash(Math.min(1.2, ev.speed / 18) * vol)
+        fx.sparks(ev.x ?? c.x, (ev.y ?? c.y) + 0.2, ev.z ?? c.z, Math.min(30, 6 + ev.speed * 1.5))
+        if (ev.speed > 10) fx.flash(ev.x ?? c.x, (ev.y ?? c.y) + 0.3, ev.z ?? c.z)
+        if (mine || ev.other === myId) fx.addShake(Math.min(0.9, ev.speed / 22))
+        break
       case 'land':
         if (ev.air > 0.35) {
           const sname = c.surf === 'grass' ? [0.45, 0.55, 0.3] : [0.66, 0.58, 0.46]
@@ -501,19 +637,31 @@ function handleEvents(e) {
           if (ev.sev > 0) fx.sparks(c.x, c.y - 0.4, c.z, Math.min(30, ev.sev * 2))
         }
         break
+      case 'stunt':
+        if (mine) {
+          const name = ev.kind === 'roll' ? 'BARREL ROLL' : 'FLAT SPIN'
+          hud.feed(name + (ev.n > 1 ? ' x' + ev.n : ''), '+' + Math.round(ev.gain * 100) + '% NITRO')
+          audio.cp()
+        }
+        break
+      case 'perfect':
+        if (mine) { hud.feed('PERFECT NITRO'); audio.boostStart(); audio.boostStart(); fx.addShake(0.5) }
+        for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; fx.emit(c.x, c.y, c.z, { vx: Math.cos(a) * 14, vy: 0.5, vz: Math.sin(a) * 14, life: 0.45, size: 1.4, grow: 2, r: 1, g: 0.85, b: 0.4, a: 0.9, add: true }) }
+        break
       case 'wreck':
+        if (ev.kind === 'knock' && mine) hud.message('KNOCKED DOWN', '', 1.1)
         fx.flash(c.x, c.y + 0.5, c.z)
         for (let i = 0; i < 10; i++) fx.smoke(c.x, c.y + 0.5, c.z, { dark: 0.12, size: 3, life: 2.4, vy: 3, a: 0.7 })
         fx.sparks(c.x, c.y, c.z, 30, null, 14)
         if (vol) audio.crash(1.5 * vol)
-        if (mine) { hud.message(t('msgWreck'), '', 1.8); fx.addShake(1.4) }
+        if (mine && ev.kind !== 'knock') { hud.message(t('msgWreck'), '', 1.4); fx.addShake(1.4) }
         break
       case 'fall': if (mine) hud.message(t('msgFall'), '', 1.6); break
       case 'overheat': if (mine) hud.message(t('msgOverheat'), '', 1.4); break
       case 'boostEmpty': if (mine) hud.toast(t('msgBoostEmpty')); break
       case 'respawn':
         if (model && ev.repair) { model.resetParts(); model.updateParts(c.dmg) }
-        if (mine && onlineRace && online) online.send({ t: 'input', data: { k: 'respawn' } })
+        if (mine && onlineRace && online) online.send({ t: 'input', data: { k: 'respawn', x: Math.round(c.x * 10) / 10, z: Math.round(c.z * 10) / 10 } })
         break
       case 'break': {
         // 破壊は世界の destroyed を見て描く（誰が壊しても同じ）。向きの情報だけ取っておく
@@ -608,6 +756,11 @@ function frame() {
     }
   }
 
+  // 一般車
+  if (race && race.traffic) {
+    for (const c of race.traffic.cars) { const m = trafficModels.get(c.id); if (m) m.update(c, dt, {}) }
+  }
+
   // デモ中は数秒ごとに先頭付近の車を追う
   if (mode !== 'race' && race) {
     demoSwitch -= dt
@@ -620,11 +773,12 @@ function frame() {
   }
 
   updateCamera(dt)
+  updateGuide(now)
   fx.update(paused ? 0 : dt)
 
   // 次のゲートを光らせる
   const myEntry = me ? race.entry(myId) : null
-  built.gates.forEach((g, i) => { g.beam.material.opacity = myEntry && i === myEntry.cp ? 0.35 + Math.sin(now / 200) * 0.15 : 0 })
+  built.gates.forEach((g, i) => { g.beam.material.opacity = myEntry && !myEntry.finished && i === myEntry.cp % world.gates.length ? 0.35 + Math.sin(now / 200) * 0.15 : 0 })
 
   // 影は車の周りだけ
   const f = follow || { x: 0, y: 0, z: 0 }
@@ -661,6 +815,14 @@ let wasBoosting = false
 function raceEvent(ev) {
   if (!me) return
   if (ev.t === 'go') audio.beep(true)
+  if (ev.t === 'takedown' && ev.id === myId) { audio.crash(1.2); hud.message('TAKEDOWN', race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
+  if (ev.t === 'nearmiss' && ev.id === myId) { hud.feed('NEAR MISS', '+8% NITRO'); if (ev.traffic) audio.horn() }
+  if (ev.t === 'smash') {
+    fx.sparks(ev.x, ev.y, ev.z, 20, null, 10); fx.flash(ev.x, ev.y + 0.3, ev.z)
+    const near = me ? Math.hypot(me.x - ev.x, me.z - ev.z) : 99
+    if (near < 80) audio.crash(Math.min(1.2, ev.rel / 25) * (1 - near / 80))
+    if (ev.id === myId) { hud.feed('CRASH', '+5% NITRO'); fx.addShake(0.4) }
+  }
   if (ev.id === myId && ev.t === 'cp') { audio.cp(); hud.message(ev.name, fmtTime(race.t), 1.1) }
   if (ev.id === myId && ev.t === 'finish') { audio.fanfare(); hud.message(t('goal'), fmtTime(ev.time), 2.4) }
 }
@@ -689,11 +851,11 @@ function updateCamera(dt) {
     const l = Math.hypot(hx, hz); hx /= l; hz /= l
   }
   // レースゲームの定番: 車のすぐ後ろ・低い位置から前を水平に見る（0）/ 少し引き（1）/ ボンネット（2）
-  const presets = [[5.0, 1.45], [8.5, 2.6], [0, 0]]
+  const presets = [[3.25, 1.15], [6.0, 2.0], [0, 0]]
   let [back0, up0] = presets[camMode]
   // 縦長の画面は上が空ばかりになるので、少し高くから見下ろす
-  if (camera.aspect < 1 && camMode !== 2) { back0 += 1.2; up0 += 1.1 }
-  let back = back0 + Math.min(1.6, v * 0.022), up = up0
+  if (camera.aspect < 1 && camMode !== 2) { back0 += 0.4; up0 += 0.45 }
+  let back = back0 + Math.min(0.7, v * 0.01), up = up0
   // カウントダウン中は前から回り込む
   if (race && race.phase === 'countdown' && c === me) {
     const k = Math.max(0, Math.min(1, (-race.t - 0.6) / (GAME.countdownSec - 0.6)))
@@ -724,7 +886,7 @@ function updateCamera(dt) {
   }
   const gy = world.groundAt(tx, tz, ty).h + 0.8
   if (ty < gy) ty = gy
-  const k = 1 - Math.exp(-dt * 7)
+  const k = 1 - Math.exp(-dt * 10)
   _v.set(tx, ty, tz)
   cam.pos.lerp(_v, k)
   _l.set(pos.x + hx * 10, pos.y + (camera.aspect < 1 ? 0.2 : 1.0), pos.z + hz * 10)
@@ -742,8 +904,8 @@ function updateCamera(dt) {
   camera.lookAt(cam.look)
   // 縦長の画面では横の見える幅が狭くならないよう縦の画角を広げる
   const asp = camera.aspect
-  const base = asp >= 1 ? 62 : Math.min(98, 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(44)) / asp) * 180 / Math.PI)
-  const fov = base + Math.min(12, v * 0.14) + (c.boosting ? 6 : 0)
+  const base = asp >= 1 ? 58 : Math.min(90, 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(40)) / asp) * 180 / Math.PI)
+  const fov = base + Math.min(10, v * 0.12) + (c.boosting ? (c.perfect ? 10 : 6) : 0)
   cam.fov += (fov - cam.fov) * (1 - Math.exp(-dt * 4))
   camera.fov = cam.fov
   camera.updateProjectionMatrix()
@@ -790,6 +952,7 @@ function ensureOnline() {
     onClosed: () => toTitle(),
     onRaceStart: (view) => {
       audio.start()
+      loadStage(view.stage === 'city' ? 'city' : 'touge')
       mode = 'race'
       menuOpen = false
       startRace({ view })
@@ -801,8 +964,9 @@ function ensureOnline() {
     onUnbreak: id => {
       // サーバーに却下された破壊を元に戻す
       world.destroyed.delete(id); world.destroyedAt.delete(id); seenBroken.delete(id)
-      const old = props.get(id); if (old) old.parent && old.parent.remove(old)
       const o = world.objectById.get(id)
+      if (o.type === 'guardrail') { setRail(id, true); return }
+      const old = props.get(id); if (old) old.parent && old.parent.remove(old)
       const m = new THREE.Mesh(geoCache[o.type] || (geoCache[o.type] = propGeometry(o.type)), propMat)
       m.position.set(o.cx, o.y0, o.cz); m.rotation.y = o.yaw; m.castShadow = true
       scene.add(m); props.set(id, m)
@@ -889,7 +1053,7 @@ $('btnCopy').onclick = () => {
   if (navigator.clipboard) navigator.clipboard.writeText(v).then(done, () => { $('inviteLink').select(); document.execCommand('copy'); done() })
   else { $('inviteLink').select(); document.execCommand('copy'); done() }
 }
-$('btnStartOnline').onclick = () => { audio.start(); online.start(Number($('cpuOnline').value)) }
+$('btnStartOnline').onclick = () => { audio.start(); online.start(Number($('cpuOnline').value), profile.stage) }
 $('btnLeave').onclick = () => { audio.ui(); online.leave(); renderLobby(null) }
 $('btnLobbyGarage').onclick = () => { audio.ui(); returnTo = 'lobby'; show('garage') }
 
@@ -934,12 +1098,14 @@ setTimeout(() => loadCarModel(Q.carLite ? 'assets/models/car_lite.glb' : 'assets
     models.set(e.id, m)
   }
   if (preview) preview.key = ''
+  for (const [id, m] of trafficModels) { scene.remove(m.group); m.dispose(); trafficModels.delete(id) }
+  if (race && race.traffic) for (const c of race.traffic.cars) { const m = new ProcCar(c.kind, c.color); scene.add(m.group); trafficModels.set(c.id, m) }
 }).catch(err => console.warn('car model', err)), 300)
 addEventListener('pointerdown', () => audio.start(), { once: true })
 
 // 検証用の窓口（本番の操作には使わない）
 window.__btr = {
-  world, get race() { return race }, get me() { return me }, get mode() { return mode }, profile, startOffline: beginPlayerRace,
+  get world() { return world }, get race() { return race }, get me() { return me }, get mode() { return mode }, profile, startOffline: beginPlayerRace,
   get online() { return online }, get myId() { return myId },
   setPaused: p => { paused = p }, fx, camera, renderer,
   autopilot(force) { autopilot = me ? createDriver(world, me, planRoute(world, Math.random, 0.5, force)) : null },

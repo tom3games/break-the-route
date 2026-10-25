@@ -6,6 +6,7 @@ const b = await chromium.launch({ args: ['--use-angle=metal', '--enable-gpu', '-
 const p = await b.newPage({ viewport: { width: 1200, height: 630 }, locale: 'ja-JP' })
 await p.goto('http://localhost:5193/')
 await p.waitForFunction(() => window.__btrReady)
+await p.evaluate(() => { window.__btr.profile.stage = 'touge' })
 await p.selectOption('#cpuSelect', '3')
 await p.click('#btnOffline')
 await p.waitForTimeout(4600)

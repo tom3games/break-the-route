@@ -42,17 +42,23 @@ export function basis(yaw, pitch, roll) {
   }
 }
 
-export function respawn(c, { repair = false } = {}) {
-  const p = c.respawnPoint
+export function respawn(c, { repair = false, safe = true } = {}) {
+  // 2秒くらい前に地面を走っていた位置（落ちる直前・ぶつかる直前より手前）。無ければ直前のゲート
+  const h = c.safeHist || []
+  const sp = safe && h.length >= 4 ? h[Math.max(0, h.length - 8)] : null
+  const p = sp || c.respawnPoint
   c.x = p.x; c.z = p.z; c.y = PHYS.rideHeight + (p.y || 0)
   c.vx = c.vy = c.vz = 0
   c.yaw = p.yaw; c.pitch = 0; c.roll = 0; c.wp = 0; c.wr = 0
+  c.stunt = null
+  if (sp) { c.vx = Math.sin(p.yaw) * 22; c.vz = Math.cos(p.yaw) * 22; c.safeHist = [] }
   c.grounded = true; c.airTime = 0; c.falling = false
   if (repair) { for (const k in c.dmg) c.dmg[k] = Math.max(c.dmg[k], GAME.wreckRepairTo); c.dents.length = 0 }
   c.wreck = 0
-  c.freeze = GAME.respawnFreezeSec
+  c.freeze = sp ? 0.25 : GAME.respawnFreezeSec
   c.boostLock = false
-  c.boost = Math.max(c.boost, 0.4)
+  // 大破・落下から直して戻るときはニトロ満タン。自分で戻る（R）ときは少しだけ
+  c.boost = repair ? 1 : Math.max(c.boost, 0.4)
   c.events.push({ t: 'respawn', repair })
 }
 
@@ -76,6 +82,7 @@ export function step(c, inp, dt, world, others = null) {
   // 大破・落下中は待つだけ
   if (c.wreck > 0) {
     c.wreck -= dt
+    if (c.grounded) c.yaw += 5 * dt * Math.min(1, Math.hypot(c.vx, c.vz) / 10) // スピンしながら止まる
     c.vx *= 0.97; c.vz *= 0.97; c.vy -= PHYS.gravity * dt
     c.x += c.vx * dt; c.z += c.vz * dt; c.y += c.vy * dt
     const g = world.groundAt(c.x, c.z, c.y - PHYS.rideHeight)
@@ -83,30 +90,44 @@ export function step(c, inp, dt, world, others = null) {
     if (c.wreck <= 0) respawn(c, { repair: true })
     return
   }
-  if (c.freeze > 0) { c.freeze -= dt; c.vx = c.vy = c.vz = 0; regen(c, dt, false); return }
+  if (c.freeze > 0) { c.freeze -= dt; regen(c, dt, false); if (Math.hypot(c.vx, c.vz) < 1) { c.vx = c.vy = c.vz = 0 } return }
   if (inp.respawn) { respawn(c); return }
 
   // 性能（損傷とオーバーヒートで落ちる）
   const hot = c.overheat
-  const maxSpd = S.maxSpeed * (0.6 + 0.4 * d.engine) * (hot ? 0.82 : 1)
-  const accel = S.accel * (0.5 + 0.5 * d.engine) * (hot ? 0.75 : 1)
+  const rb = c.rb || 1 // CPU の追い上げ・手加減（人間は常に 1）
+  const maxSpd = S.maxSpeed * (0.6 + 0.4 * d.engine) * (hot ? 0.82 : 1) * rb
+  const accel = S.accel * (0.5 + 0.5 * d.engine) * (hot ? 0.75 : 1) * rb
   const grip = S.grip * (0.55 + 0.45 * d.tires)
   const steerK = S.steer * (0.7 + 0.3 * d.tires)
   const boosting = !!inp.boost && c.boost > 0 && !c.boostLock && !hot
+  // パーフェクトニトロ: 押してから 0.45〜0.8 秒の間にもう一度押すと強くなる
+  const press = !!inp.boost && !c.boostPrev
+  c.boostPrev = !!inp.boost
+  if (press && boosting && !inp.ai) {
+    const since = c.t - (c.boostStart ?? -9)
+    if (c.boostStart != null && since >= 0.45 && since <= 0.8 && !c.perfect) { c.perfect = true; c.events.push({ t: 'perfect' }) }
+    else if (since > 0.8 || c.boostStart == null) { c.boostStart = c.t; c.perfect = false }
+  }
+  if (!boosting && !inp.boost) { c.perfect = false; if (c.t - (c.boostStart ?? -9) > 0.85) c.boostStart = null }
   c.boosting = boosting
+  const pf = boosting && c.perfect ? 1.45 : 1
 
   // ---- 4輪の接地
   const cy = Math.cos(c.yaw), sy = Math.sin(c.yaw)
   const base = c.y - PHYS.rideHeight
   const hs = [], surfs = []
-  let contacts = 0
+  let contacts = 0, cliff = false
+  const px0 = c.x, pz0 = c.z
   for (const [lx, lz] of WHEELS) {
     const wx = c.x + lx * cy + lz * sy, wz = c.z - lx * sy + lz * cy
     const g = world.groundAt(wx, wz, base)
+    // 車輪の位置の地面が段差より高い = 崖の壁。地面として使わず、壁として押し返す
+    if (g.h > base + PHYS.stepUp + 0.3) { cliff = true; hs.push(base - 1.6); surfs.push(g.surf); continue }
     // 地面が無い（谷の上など）輪は少し下にあるとみなす。そこへ傾いていく
     hs.push(Math.max(g.h, base - 1.6))
     surfs.push(g.surf)
-    if (base - g.h < PHYS.suspTravel) contacts++
+    if (base - g.h < PHYS.suspTravel) { contacts++; if (g.slab) { c.lastSlab = g.slab; c.lastSlabT = c.t } }
   }
 
   let gripMul = 1, rollMul = 1, surfName = c.surf
@@ -149,15 +170,27 @@ export function step(c, inp, dt, world, others = null) {
     let vn = c.vx * nx + c.vy * ny + c.vz * nz
     if (vn < 0) { c.vx -= nx * vn; c.vy -= ny * vn; c.vz -= nz * vn; vn = 0 }
 
+    // 急すぎる斜面（谷の壁など）は走れない。重力で滑り落ちるだけ
+    const steep = ny < 0.6
+    if (!steep) {
     // ハンドル。速いほど切れにくい。バック中は逆
     const vf0 = c.vx * sy + c.vz * cy
     const av0 = Math.abs(vf0)
-    const sf = clamp(av0 / 5, 0, 1) / (1 + av0 / 28)
+    // 速いほど切れにくく（高速で切りすぎてスピンしない）。2026-10-26 本人「操作しきれへん」で 28→17
+    const sf = clamp(av0 / 5, 0, 1) / (1 + av0 / 17)
     let yawRate = (inp.steer || 0) * steerK * sf * (vf0 < -0.5 ? -1 : 1)
-    if (inp.handbrake && av0 > 6) yawRate *= 1.45
+    if ((inp.handbrake || (!inp.ai && (inp.brake || 0) > 0 && Math.abs(inp.steer || 0) > 0.3)) && av0 > 6) yawRate *= 1.45
     // 壊れたサスペンションは高速でふらつく
-    yawRate += (1 - d.susp) * Math.sin(c.t * 5.3) * 0.25 * Math.min(1, av0 / 35)
+    yawRate += (1 - d.susp) * Math.sin(c.t * 5.3) * 0.12 * Math.min(1, av0 / 35)
     c.yaw -= yawRate * dt
+    // 走行安定の補助: ハンドルを戻していれば、車の向きを進む向きへ寄せる（スピンしにくい）
+    if (Math.abs(inp.steer || 0) < 0.15 && !inp.handbrake && av0 > 8) {
+      const hv = Math.atan2(c.vx, c.vz)
+      let dy = hv - c.yaw
+      while (dy > Math.PI) dy -= 2 * Math.PI
+      while (dy < -Math.PI) dy += 2 * Math.PI
+      if (Math.abs(dy) < 1.2) c.yaw += dy * Math.min(1, 2.2 * dt)
+    }
 
     // 新しい向きで、路面に沿った前と横
     const cyn = Math.cos(c.yaw), syn = Math.sin(c.yaw)
@@ -172,13 +205,15 @@ export function step(c, inp, dt, world, others = null) {
     const vnn = c.vx * nx + c.vy * ny + c.vz * nz
 
     // アクセル・ブレーキ・バック
-    const top = maxSpd + (boosting ? S.boostTop * (0.6 + 0.4 * d.engine) : 0)
+    const top = maxSpd + (boosting ? S.boostTop * (0.6 + 0.4 * d.engine) * (pf > 1 ? 1.5 : 1) : 0)
     const thr = inp.throttle || 0, brk = inp.brake || 0
     if (thr > 0) {
       if (vf < -0.5) vf += 30 * thr * dt
-      else vf += (accel * thr * Math.max(0.12, 1 - (vf / top) ** 2) + (boosting && vf < top ? S.boostForce : 0)) * dt
+      else vf += (accel * thr * Math.max(0.12, 1 - (vf / top) ** 2) + (boosting && vf < top ? S.boostForce * pf : 0)) * dt
     }
-    if (brk > 0) {
+    const brakeDrift = !inp.ai && brk > 0 && Math.abs(inp.steer || 0) > 0.3 && vf > 14 // CPU のブレーキは普通に減速
+    if (brakeDrift) vf -= 7 * dt // 曲がりながらのブレーキは減速より横滑り
+    else if (brk > 0) {
       if (vf > 0.8) vf = Math.max(0, vf - 34 * brk * dt)
       else if (thr <= 0) vf = Math.max(-14, vf - 10 * brk * dt)
     }
@@ -189,7 +224,7 @@ export function step(c, inp, dt, world, others = null) {
 
     // 横滑り。ハンドブレーキと土・草で滑る。消えた横の勢いの大半は前へ回す（曲がっても失速しすぎない）
     const av = Math.abs(vf)
-    const latGrip = grip * gripMul * (inp.handbrake ? 0.16 : 1) * (av > 32 && Math.abs(inp.steer || 0) > 0.7 ? 0.8 : 1)
+    const latGrip = grip * gripMul * (inp.handbrake ? 0.16 : brakeDrift ? 0.3 : 1) * (av > 32 && Math.abs(inp.steer || 0) > 0.7 ? 0.8 : 1)
     const keep = Math.exp(-latGrip * dt)
     const lost = Math.abs(vl) * (1 - keep)
     vl *= keep
@@ -200,9 +235,25 @@ export function step(c, inp, dt, world, others = null) {
     c.vx = fx * vf + rx * vl + nx * vnn
     c.vy = fy * vf + ry * vl + ny * vnn
     c.vz = fz * vf + rz * vl + nz * vnn
+    } else { c.drifting = false; c.slip = 0 }
   } else {
     // ---- 空中
-    if (c.grounded) { c.grounded = false; c.airTime = 0; c.events.push({ t: 'takeoff' }) }
+    if (c.grounded) {
+      c.grounded = false; c.airTime = 0; c.events.push({ t: 'takeoff' })
+      // 台から飛んだら技。曲がった台はバレルロール、ドリフトしながらならフラットスピン
+      const sl = c.lastSlab && c.t - c.lastSlabT < 0.2 ? c.lastSlab : null
+      const v = speedOf(c)
+      if (sl && v > 12 && (sl.kind === 'kicker' || sl.kind === 'ramp' || sl.kind === 'bridge' || sl.kind === 'roll')) {
+        const tAir = Math.max(0.5, 2 * Math.max(2, c.vy) / PHYS.gravity + 0.25)
+        if (sl.roll) {
+          const n = Math.max(1, Math.min(3, Math.floor(tAir / 0.8)))
+          c.stunt = { type: 'roll', dir: sl.roll, rate: Math.PI * 2 * n / tAir, acc: 0 }
+        } else if ((c.slip > 4 || inp.handbrake) && tAir > 0.7) {
+          const n = Math.max(1, Math.min(2, Math.floor(tAir / 0.9)))
+          c.stunt = { type: 'spin', dir: Math.sign(inp.steer || 1), rate: Math.PI * 2 * n / tAir, acc: 0 }
+        }
+      }
+    }
     c.airTime += dt
     c.maxAir = Math.max(c.maxAir, c.airTime)
     c.vy -= PHYS.gravity * dt
@@ -221,26 +272,48 @@ export function step(c, inp, dt, world, others = null) {
     const pi = inp.pitch || 0, ri = inp.roll || 0
     const wpT = pi ? pi * airK : (traj * 0.75 - c.pitch) * 1.1
     c.wp += (wpT - c.wp) * Math.min(1, dt * (pi ? 5 : 2.5))
-    const wrT = ri ? -ri * airK : -c.roll * 1.6
-    c.wr += (wrT - c.wr) * Math.min(1, dt * (ri ? 5 : 3))
     c.pitch = clamp(c.pitch + c.wp * dt, -1.45, 1.45)
-    c.roll = clamp(c.roll + c.wr * dt, -1.45, 1.45)
-    c.yaw -= (inp.steer || 0) * 0.9 * dt
+    const st = c.stunt
+    if (st && st.type === 'roll') { const d = st.rate * dt; c.roll += st.dir * d; st.acc += d }
+    else {
+      const wrT = ri ? -ri * airK : -c.roll * 1.6
+      c.wr += (wrT - c.wr) * Math.min(1, dt * (ri ? 5 : 3))
+      c.roll = clamp(c.roll + c.wr * dt, -1.45, 1.45)
+    }
+    if (st && st.type === 'spin') { const d = st.rate * dt; c.yaw -= st.dir * d; st.acc += d }
+    else c.yaw -= (inp.steer || 0) * 0.9 * dt
     c.drifting = false
   }
   c.surf = surfName
 
   // ---- 位置
   c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt
+  if (cliff) {
+    // 崖の壁にぶつかった: 横には進めない
+    const sp = Math.hypot(c.vx, c.vz)
+    c.x = px0; c.z = pz0; c.vx *= -0.15; c.vz *= -0.15
+    if (sp > 4) c.events.push({ t: 'scrape', speed: sp })
+  }
 
   // ---- 壁・壊せる物・他の車
   collide(c, world, boosting)
   if (others) for (const o of others) if (o !== c && o.id !== c.id && !o.wreck) bump(c, o)
 
   // ---- 落下
-  if (c.y < GAME.fallY && !c.wreck) {
+  if (c.y < (world.fallY ?? GAME.fallY) && !c.wreck) {
     c.wreck = 1.4; c.falling = true
     c.events.push({ t: 'fall' })
+  }
+
+  // ---- 復帰用に、地面を走っていた位置を 0.25 秒ごとに覚える（最大4秒分）
+  if (c.grounded && !c.wreck && speedOf(c) > 4 && (c.surf === 'road' || c.surf === 'dirt' || c.surf === 'wood')) {
+    c.safeT = (c.safeT || 0) + dt
+    if (c.safeT > 0.25) {
+      c.safeT = 0
+      const hist = c.safeHist || (c.safeHist = [])
+      hist.push({ x: c.x, z: c.z, y: c.y - PHYS.rideHeight, yaw: Math.atan2(c.vx, c.vz) })
+      if (hist.length > 16) hist.shift()
+    }
   }
 
   // ---- 修理ピット
@@ -268,31 +341,37 @@ export function step(c, inp, dt, world, others = null) {
 
 function regen(c, dt, boosting) {
   if (boosting) return
-  const r = 0.035 + (c.drifting ? 0.22 : 0) + (!c.grounded ? 0.2 : 0)
+  const r = 0.035 + (c.drifting ? 0.3 : 0) + (!c.grounded ? 0.3 : 0)
   c.boost = Math.min(1, c.boost + r * dt)
   if (c.boostLock && c.boost >= 0.3) c.boostLock = false
 }
 
 // 着地。法線方向の速さと、車体と地面のずれで損傷が決まる
 function land(c, nx, ny, nz, tP, tR) {
-  const S = c.stats, d = c.dmg
   const vn = c.vx * nx + c.vy * ny + c.vz * nz
+  const impact = Math.max(0, -vn)
+  // 技（バレルロール・フラットスピン）を数えて、姿勢を整えて着地させる（失敗しても転ばない）
+  if (c.stunt) {
+    const st = c.stunt
+    const n = Math.floor((st.acc + 0.9) / (Math.PI * 2))
+    if (st.type === 'roll') c.roll = tR
+    else c.yaw = Math.atan2(c.vx, c.vz)
+    if (n > 0) {
+      const gain = (st.type === 'roll' ? 0.25 : 0.2) * n
+      c.boost = Math.min(1, c.boost + gain)
+      if (c.boostLock && c.boost >= 0.3) c.boostLock = false
+      c.events.push({ t: 'stunt', kind: st.type, n, gain })
+    }
+    c.stunt = null
+  }
+  c.roll = Math.atan2(Math.sin(c.roll), Math.cos(c.roll))
   const b = basis(c.yaw, c.pitch, c.roll)
   const align = clamp(b.ux * nx + b.uy * ny + b.uz * nz, -1, 1)
   const mis = Math.acos(align)
-  const impact = Math.max(0, -vn)
-  const safe = PHYS.safeLand * S.landing * (0.4 + 0.6 * d.susp)
-  const sev = Math.max(0, impact - safe) * (1 + 2.5 * Math.max(0, mis - 0.3))
-  const crash = mis > 1.1 && impact > 3
-  let amount = sev > 0 ? Math.pow(sev, 1.3) * DAMAGE.landBase : 0
-  if (crash) amount += 0.12 + impact * 0.006
-  const dealt = damage(c, amount, { susp: 1.2, tires: 0.6, body: 0.75, engine: 0.2, cool: 0.1 }, 'land')
-  if (sev > 0 || crash) {
-    const keep = crash ? 0.45 : 1 - Math.min(0.45, sev * 0.02)
-    c.vx *= keep; c.vz *= keep
-  }
-  c.events.push({ t: 'land', impact, mis, sev, crash, air: c.airTime, dmg: dealt })
-  if (crash) { c.pitch = tP; c.roll = tR; c.yaw += (c.roll > 0 ? 1 : -1) * 0.6 }
+  // 着地では壊れない（2026-10-26 本人「着地だけでダメージ食らうのやめて」）。ひどい角度なら少し減速するだけ
+  const bad = mis > 0.9 && impact > 4
+  if (bad) { c.vx *= 0.8; c.vz *= 0.8; c.pitch = tP; c.roll = tR }
+  c.events.push({ t: 'land', impact, mis, sev: 0, crash: false, air: c.airTime, dmg: 0 })
 }
 
 function collide(c, world, boosting) {
@@ -340,6 +419,7 @@ function collide(c, world, boosting) {
           if (power >= o.def.breakAt) {
             world.breakObj(o.id)
             c.breaks++
+            c.boost = Math.min(1, c.boost + 0.04) // 壊すとニトロが少し戻る
             const keep = 1 - o.def.absorb
             c.vx *= keep; c.vz *= keep
             damage(c, o.def.hard * 0.012 * Math.max(0, -vn - 8) * 0.2, { body: 1, engine: 0.3 }, 'break')
@@ -380,23 +460,43 @@ function collide(c, world, boosting) {
   }
 }
 
-// 車同士。自分だけを押し返す（相手は相手の側で同じ計算をする）
+// 車同士。前後2つの円どうしで当てる（横から当てると押し出せる、後ろの角に当てるとスピンする）。
+// 自分だけを動かす（相手は相手の側で同じ計算をする。オフラインでは全員ここを通る）
 function bump(c, o) {
-  const dx = c.x - o.x, dz = c.z - o.z
   if (Math.abs(c.y - o.y) > 2) return
-  const dist = Math.hypot(dx, dz)
-  const min = 2.4
-  if (dist >= min || dist < 1e-4) return
-  const nx = dx / dist, nz = dz / dist
+  if ((c.x - o.x) ** 2 + (c.z - o.z) ** 2 > 36) return
+  const r = PHYS.carRadius
+  const cs = Math.sin(c.yaw), cc = Math.cos(c.yaw), os = Math.sin(o.yaw || 0), oc = Math.cos(o.yaw || 0)
+  let hit = null
+  for (const a of [PHYS.carHalfLen, -PHYS.carHalfLen]) for (const b of [PHYS.carHalfLen, -PHYS.carHalfLen]) {
+    const ax = c.x + cs * a, az = c.z + cc * a, bx = o.x + os * b, bz = o.z + oc * b
+    const dx = ax - bx, dz = az - bz, d = Math.hypot(dx, dz)
+    if (d < r * 2 && (!hit || d < hit.d)) hit = { d, dx, dz, a }
+  }
+  if (!hit || hit.d < 1e-4) return
+  const nx = hit.dx / hit.d, nz = hit.dz / hit.d
   const rv = (c.vx - (o.vx || 0)) * nx + (c.vz - (o.vz || 0)) * nz
   if (rv < 0) {
-    const share = (o.stats ? o.stats.mass : 1) / ((c.stats.mass) + (o.stats ? o.stats.mass : 1))
-    c.vx -= nx * rv * 1.3 * share; c.vz -= nz * rv * 1.3 * share
-    const sev = Math.max(0, -rv - 5)
+    const mo = o.stats ? o.stats.mass : 1
+    const share = mo / (c.stats.mass + mo)
+    // 少し弾む（1.0 なら止まるだけ）。重い相手ほど自分が飛ばされる
+    c.vx -= nx * rv * 1.6 * share; c.vz -= nz * rv * 1.6 * share
+    // 当たった位置が前後の端なら回される
+    c.yaw += Math.sign(hit.a) * (nx * cc - nz * cs) * Math.min(0.5, -rv * 0.03) * share
+    const sev = Math.max(0, -rv - 6)
     if (sev > 0) damage(c, Math.pow(sev, 1.3) * DAMAGE.wallBase * DAMAGE.carHit, { body: 1, tires: 0.3 }, 'car')
-    if (-rv > 3) c.events.push({ t: 'carhit', speed: -rv, other: o.id })
+    // ノックダウン: 自分より速い相手に強く当てられたらスピンして脱落（すぐ近くで復帰）
+    const so = Math.hypot(o.vx || 0, o.vz || 0), sc = speedOf(c)
+    if (-rv > 12 && so > sc + 5 && !c.wreck) {
+      c.lastHitBy = o.id; c.lastHitAt = c.t
+      c.wreck = GAME.knockSec
+      c.events.push({ t: 'wreck', kind: 'knock' })
+    }
+    if (-rv > 3) c.events.push({ t: 'carhit', speed: -rv, other: o.id, x: c.x - nx * r, y: c.y, z: c.z - nz * r })
+    c.lastHitBy = o.id; c.lastHitAt = c.t
   }
-  c.x += nx * (min - dist) * 0.5; c.z += nz * (min - dist) * 0.5
+  const push = (r * 2 - hit.d) * 0.5
+  c.x += nx * push; c.z += nz * push
 }
 
 // ネット送信・保存用（数値を丸める）

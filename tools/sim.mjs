@@ -4,24 +4,24 @@
 import { createWorld } from '../public/shared/track.js'
 import { createCar, step, speedOf } from '../public/shared/physics.js'
 import { createDriver, drive, planRoute } from '../public/shared/ai.js'
-import { crossedGate } from '../public/shared/track.js'
+import { crossedGate, gateAt, totalGates } from '../public/shared/track.js'
 import { GAME } from '../public/shared/config.js'
 import { mulberry } from '../public/shared/race.js'
 
 const DT = GAME.step
-const world = createWorld()
+const world = createWorld(process.env.STAGE || 'touge')
 import { pathToFileURL } from 'node:url'
 const direct = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 const what = direct ? (process.argv[2] || 'all') : 'none'
 
-export function runRoute(force, { carId = 'runner', levels = {}, maxT = 400, seed = 1, log = false } = {}) {
+export function runRoute(force, { carId = 'runner', levels = {}, maxT = 600, seed = 1, log = false } = {}) {
   world.reset()
   const car = createCar({ id: 'p', carId, levels, spawn: world.grid[0] })
   const plan = planRoute(world, mulberry(seed), 0.5, force)
   const dr = createDriver(world, car, plan, 1)
   let cp = 0, t = 0, px = car.x, pz = car.z
   const splits = [], ev = { falls: 0, wrecks: 0, breaks: 0, respawns: 0, hits: 0, lands: [] }
-  while (t < maxT && cp < world.gates.length) {
+  while (t < maxT && cp < totalGates(world)) {
     const inp = drive(dr, world)
     step(car, inp, DT, world)
     t += DT
@@ -35,11 +35,11 @@ export function runRoute(force, { carId = 'runner', levels = {}, maxT = 400, see
       if (log && e.t !== 'land' && e.t !== 'takeoff' && e.t !== 'scrape') console.log(t.toFixed(1), e.t, JSON.stringify(e).slice(0, 120), car.x.toFixed(0), car.z.toFixed(0))
     }
     car.events.length = 0
-    const g = world.gates[cp]
-    if (crossedGate(g, px, pz, car.x, car.z)) { cp++; car.respawnPoint = { ...g.respawn }; splits.push(t) }
+    const g = gateAt(world, cp)
+    if (crossedGate(g, px, pz, car.x, car.z) >= 0) { cp++; car.respawnPoint = { ...g.respawn }; splits.push(t) }
     px = car.x; pz = car.z
   }
-  return { t, done: cp >= world.gates.length, splits, ev, body: car.dmg, picks: plan.picks, car }
+  return { t, done: cp >= totalGates(world), splits, ev, body: car.dmg, picks: plan.picks, car }
 }
 
 function fmt(r) {
@@ -59,9 +59,9 @@ if (what === 'all' || what === 'accel') {
 }
 
 if (what === 'all' || what === 'routes') {
-  const base = ['A', 'A', 'A', 'A']
+  const base = ['A', 'A', 'A', 'A', 'A', 'A']
   console.log('全部 A:', fmt(runRoute(base)))
-  const alt = [['B', 'D'], ['B', 'C'], ['D', 'E'], ['D', 'BE']]
+  const alt = [['B', 'D'], ['B', 'C'], ['D', 'E'], ['D', 'BE'], ['D']]
   alt.forEach((opts, si) => opts.forEach(o => {
     const f = [...base]; f[si] = o
     console.log(`区間${si + 1}=${o}:`, fmt(runRoute(f)))
@@ -87,4 +87,4 @@ if (what === 'all' || what === 'bridge') {
   }
 }
 
-if (what === 'log') console.log(fmt(runRoute(process.argv.slice(3, 7), { log: true })))
+if (what === 'log') console.log(fmt(runRoute(process.argv.slice(3, 9), { log: true })))

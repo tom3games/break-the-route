@@ -124,7 +124,7 @@ test('近くで十分な速さの破壊は全員に配られ、部屋の状態�
     const [a, b] = cs
     await untilRacing(a)
     // 封鎖道路の仮設フェンスまで、許される速さで少しずつ近づく
-    const fence = W.objects.find(o => o.type === 'tempfence')
+    const fence = W.objects.find(o => o.type === 'lamp' && o.cz > 30)
     const g = W.grid[0]
     let z = g.z
     while (z < fence.cz - 3) {
@@ -151,7 +151,7 @@ test('ゲートを順に通るとサーバーが順位とゴールを決める',
     // 正面の大通りを北へ。ゲート直前と直後の位置を送る（間は許容速度内で刻む）
     let z = W.grid[0].z, x = 0
     const path = []
-    for (const gt of W.gates) { path.push([gt.respawn.x, gt.z - 1]); path.push([gt.respawn.x, gt.z + 1]) }
+    for (const gt of W.gates) { path.push([gt.respawn.x, gt.cz - 1]); path.push([gt.respawn.x, gt.cz + 1]) }
     for (const [tx, tz] of path) {
       while (Math.abs(tz - z) > 0.01) {
         z = tz > z ? Math.min(tz, z + 20) : Math.max(tz, z - 20)

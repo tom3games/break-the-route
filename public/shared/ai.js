@@ -8,7 +8,10 @@ const clamp = (v, a, b) => v < a ? a : v > b ? b : v
 // 区間ごとにルートを選んで1本の走行線にする。rng は 0..1 を返す関数、bold は 0..1（無茶をする度合い）
 export function planRoute(world, rng, bold = 0.5, force = null) {
   const pts = [], picks = [], boostZones = []
-  world.routes.forEach((opts, si) => {
+  const laps = world.laps || 1
+  const seq = []
+  for (let l = 0; l < laps; l++) world.routes.forEach((opts, si) => seq.push([opts, si]))
+  seq.forEach(([opts, si]) => {
     let o
     if (force && force[si]) o = opts.find(r => r.id === force[si])
     if (!o) {
@@ -61,9 +64,9 @@ export function createDriver(world, car, plan, skill = 0.9) {
   return { plan, safe, idx: 0, stuck: 0, reverse: 0, skill, car, fails: 0, wasFrozen: false }
 }
 
-export function drive(dr, world) {
+export function drive(dr, world, others = null) {
   const c = dr.car, P = dr.plan.pts
-  const inp = { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false, pitch: 0, roll: 0, respawn: false }
+  const inp = { throttle: 0, brake: 0, steer: 0, handbrake: false, boost: false, pitch: 0, roll: 0, respawn: false, ai: true }
   if (c.wreck > 0 || c.freeze > 0) {
     if (!dr.wasFrozen) {
       dr.fails++
@@ -110,6 +113,8 @@ export function drive(dr, world) {
     dist += Math.hypot(P[i + 1].x - P[i].x, P[i + 1].z - P[i].z)
   }
   vt *= 0.92 + 0.08 * dr.skill
+  // 傷んだ車は曲がり角を手前から遅く
+  vt *= 0.55 + 0.45 * Math.min(c.dmg.tires, c.dmg.susp)
 
   // ブースト: 必要な区間は手前で温存し、区間に入ったら全開
   // ブーストが足りないまま跳ぶ区間に来たら、安全なルートへ逃げる
@@ -123,6 +128,15 @@ export function drive(dr, world) {
   if (c.overheat || c.heat > 0.8 && !zone) boost = false
 
   inp.steer = clamp(ang * 2.4, -1, 1)
+  // 体当たりする CPU: 横や斜め前に人の車がいれば寄せていく
+  if (dr.aggr && others && c.grounded && v > 15) {
+    for (const o of others) {
+      if (o === c || o.bot || o.traffic || o.wreck) continue
+      const dx = o.x - c.x, dz = o.z - c.z
+      const fwd = dx * fx + dz * fz, lat = dx * rx + dz * rz
+      if (fwd > -3 && fwd < 9 && Math.abs(lat) < 6 && Math.abs(lat) > 0.5) { inp.steer = clamp(inp.steer + Math.sign(lat) * 0.45 * dr.aggr, -1, 1); break }
+    }
+  }
   if (v > vt + 2) { inp.brake = clamp((v - vt) / 6, 0.3, 1) } else inp.throttle = 1
   if (Math.abs(ang) > 0.7 && v > 14) inp.handbrake = true
   inp.boost = boost && !inp.brake
@@ -137,6 +151,13 @@ export function drive(dr, world) {
     dr.stuck += 1 / 60
     if (dr.stuck > 1.6) { dr.reverse = 1.2; dr.stuck = 0; dr.unstuck = (dr.unstuck || 0) + 1 }
   } else { dr.stuck = Math.max(0, dr.stuck - 1 / 60); if (v > 8) dr.unstuck = 0 }
-  if ((dr.unstuck || 0) >= 3) { inp.respawn = true; dr.unstuck = 0 }
+  // 道から大きく外れたまま（体当たりで路地に押し込まれた等）も、走行線の上に戻す
+  if (Math.sqrt(bd) > 22) dr.lost = (dr.lost || 0) + 1 / 60; else dr.lost = 0
+  if ((dr.unstuck || 0) >= 3 || dr.lost > 3) {
+    inp.respawn = true; dr.unstuck = 0; dr.lost = 0
+    const i = Math.min(P.length - 2, best + 3)
+    c.respawnPoint = { x: P[i].x, z: P[i].z, yaw: Math.atan2(P[i + 1].x - P[i].x, P[i + 1].z - P[i].z), y: world.groundAt(P[i].x, P[i].z, 50).h }
+    c.safeHist = [] // 復帰は覚えていた位置でなく走行線の上へ
+  }
   return inp
 }
