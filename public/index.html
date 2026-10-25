@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>BREAK THE ROUTE</title>
+<meta name="description" content="壊して、飛んで、自分の道を作る3D破壊レース。フェンスも壁も突き破り、崩れた橋をブーストで飛び越えて、誰より先にゴールへ。ブラウザで遊べる。">
+<meta property="og:title" content="BREAK THE ROUTE">
+<meta property="og:description" content="壊して、飛んで、自分の道を作る3D破壊レース。崩れた橋をブーストで飛び越えろ。">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://tom3games.github.io/break-the-route/og.jpg">
+<meta property="og:url" content="https://tom3games.github.io/break-the-route/">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#14161a">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Dela+Gothic+One&family=M+PLUS+1p:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=1">
+<script>
+  // 起動に失敗したときに原因を画面に出す（モジュールが読めないと module 内の catch は動かない）
+  window.__btrErrors = []
+  window.addEventListener('error', e => window.__btrErrors.push(String(e.message || e.error)))
+  window.addEventListener('unhandledrejection', e => window.__btrErrors.push(String(e.reason && e.reason.message || e.reason)))
+  setTimeout(() => {
+    if (window.__btrReady) return
+    const d = document.createElement('div')
+    d.id = 'bootfail'
+    d.textContent = '起動できませんでした / Failed to start: ' + (window.__btrErrors.join(' | ') || 'timeout') + '  [' + navigator.userAgent + ']'
+    document.body.appendChild(d)
+  }, 8000)
+</script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="view"></div>
+
+<!-- タイトル -->
+<section id="title" class="screen">
+  <div class="title-card">
+    <div class="hazard"></div>
+    <h1 class="logo"><span>BREAK</span><span class="logo-sub">THE</span><span>ROUTE</span></h1>
+    <p class="tagline" data-t="tagline"></p>
+    <p class="story" data-t="story"></p>
+    <label class="field"><span data-t="name"></span><input id="nameInput" maxlength="12" autocomplete="off" spellcheck="false"></label>
+    <div class="field-row">
+      <label class="field small"><span data-t="cpu"></span>
+        <select id="cpuSelect"></select>
+      </label>
+      <div class="carpick" id="carPickShort"></div>
+    </div>
+    <div class="btns">
+      <button id="btnOffline" class="btn primary" data-t="offline"></button>
+      <button id="btnOnline" class="btn" data-t="onlineSoon" disabled></button>
+    </div>
+    <p class="note" id="onlineNote"></p>
+    <div class="btns">
+      <button id="btnGarage" class="btn ghost" data-t="garage"></button>
+      <button id="btnHowto" class="btn ghost" data-t="howto"></button>
+    </div>
+    <div class="foot">
+      <button id="btnLang" class="link" data-t="lang"></button>
+      <button id="btnMute" class="link"></button>
+    </div>
+  </div>
+</section>
+
+<!-- ガレージ -->
+<section id="garage" class="screen hidden">
+  <div class="panel wide">
+    <header class="panel-head"><h2 data-t="garage"></h2><div class="credits"><span data-t="credits"></span> <b id="gCredits">0</b></div><button class="btn ghost small" data-back data-t="back"></button></header>
+    <div class="garage-grid">
+      <div>
+        <h3 data-t="cars"></h3>
+        <div id="carCards" class="car-cards"></div>
+        <h3 data-t="paint"></h3>
+        <div id="paints" class="paints"></div>
+        <canvas id="carPreview" width="360" height="200"></canvas>
+      </div>
+      <div>
+        <div id="stats" class="stats"></div>
+        <h3 data-t="upgrades"></h3>
+        <div id="upgrades" class="upgrades"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- オンラインのロビー -->
+<section id="lobby" class="screen hidden">
+  <div class="panel lobby">
+    <header class="panel-head"><h2 data-t="online"></h2><span class="net" id="netStatus"></span><button class="btn ghost small" id="btnLobbyBack" data-t="back"></button></header>
+    <div id="lobbyEntry">
+      <p class="lead" data-t="onlineLead"></p>
+      <div class="btns"><button id="btnCreate" class="btn primary" data-t="createRoom"></button></div>
+      <div class="join-row">
+        <input id="codeInput" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false" aria-label="code">
+        <button id="btnJoin" class="btn" data-t="joinRoom"></button>
+      </div>
+      <p class="err" id="lobbyErr"></p>
+    </div>
+    <div id="lobbyRoom" class="hidden">
+      <div class="room-code"><span data-t="roomCode"></span><b id="roomCode">----</b></div>
+      <div class="invite"><input id="inviteLink" readonly aria-label="invite"><button id="btnCopy" class="btn small" data-t="copy"></button></div>
+      <ul class="plist" id="plist"></ul>
+      <div class="lobby-row">
+        <div class="carpick" id="carPickLobby"></div>
+        <button id="btnLobbyGarage" class="btn ghost small" data-t="garage"></button>
+      </div>
+      <div class="lobby-row host-only">
+        <label class="field small"><span data-t="cpu"></span><select id="cpuOnline"></select></label>
+        <button id="btnStartOnline" class="btn primary" data-t="start"></button>
+      </div>
+      <p class="wait guest-only" data-t="waitHost"></p>
+      <div class="btns"><button id="btnLeave" class="btn ghost" data-t="leaveRoom"></button></div>
+    </div>
+  </div>
+</section>
+
+<!-- 遊び方 -->
+<section id="howto" class="screen hidden">
+  <div class="panel wide">
+    <header class="panel-head"><h2 data-t="howtoTitle"></h2><button class="btn ghost small" data-back data-t="back"></button></header>
+    <div class="howto-grid">
+      <ol class="howto-list">
+        <li data-t="howto1"></li><li data-t="howto2"></li><li data-t="howto3"></li>
+        <li data-t="howto4"></li><li data-t="howto5"></li><li data-t="howto6"></li>
+      </ol>
+      <div>
+        <h3 data-t="keys"></h3>
+        <table class="keys">
+          <tr><td><kbd>W</kbd><kbd>↑</kbd></td><td data-t="kAccel"></td></tr>
+          <tr><td><kbd>S</kbd><kbd>↓</kbd></td><td data-t="kBrake"></td></tr>
+          <tr><td><kbd>A</kbd><kbd>D</kbd></td><td data-t="kSteer"></td></tr>
+          <tr><td><kbd>Space</kbd></td><td data-t="kDrift"></td></tr>
+          <tr><td><kbd>Shift</kbd></td><td data-t="kBoost"></td></tr>
+          <tr><td><kbd>W</kbd><kbd>S</kbd><kbd>A</kbd><kbd>D</kbd></td><td data-t="kAir"></td></tr>
+          <tr><td><kbd>R</kbd></td><td data-t="kRespawn"></td></tr>
+          <tr><td><kbd>Esc</kbd></td><td data-t="kPause"></td></tr>
+          <tr><td><kbd>C</kbd></td><td data-t="kCam"></td></tr>
+          <tr><td><kbd>M</kbd></td><td data-t="kMute"></td></tr>
+        </table>
+        <p class="pad" data-t="pad"></p>
+      </div>
+      <canvas id="fullMap" width="300" height="520"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- レース中の表示 -->
+<section id="hud" class="hidden">
+  <div class="hud-tl">
+    <div class="pos"><b id="hPos">1</b><span id="hPosOf">/8</span></div>
+    <div class="time" id="hTime">0:00.00</div>
+    <div class="nextcp" id="hNext"></div>
+  </div>
+  <div class="hud-top"><div class="track" id="hTrack"></div></div>
+  <ol class="hud-tr" id="hStand"></ol>
+  <canvas id="miniMap" width="220" height="220"></canvas>
+  <div class="hud-bl">
+    <svg id="dmgSvg" viewBox="0 0 120 200" width="84" height="140" aria-hidden="true">
+      <rect id="dBody" x="22" y="18" width="76" height="164" rx="22" />
+      <rect id="dEngine" x="36" y="30" width="48" height="36" rx="6" />
+      <rect id="dCool" x="40" y="8" width="40" height="12" rx="3" />
+      <rect class="dTire" x="10" y="38" width="14" height="32" rx="4" />
+      <rect class="dTire" x="96" y="38" width="14" height="32" rx="4" />
+      <rect class="dTire" x="10" y="132" width="14" height="32" rx="4" />
+      <rect class="dTire" x="96" y="132" width="14" height="32" rx="4" />
+      <rect id="dSusp" x="36" y="120" width="48" height="10" rx="3" />
+      <rect id="dCab" x="34" y="78" width="52" height="56" rx="10" />
+    </svg>
+    <div class="dmg-list" id="dmgList"></div>
+  </div>
+  <div class="hud-br">
+    <div class="speed"><b id="hSpeed">0</b><span>km/h</span></div>
+    <div class="boost"><div class="boost-fill" id="hBoost"></div><span id="hBoostLbl">NITRO</span></div>
+  </div>
+  <div class="center-msg" id="hMsg"></div>
+  <div class="count" id="hCount"></div>
+  <div class="hint" id="hHint"></div>
+  <div class="vignette" id="hVig"></div>
+</section>
+
+<!-- ポーズ -->
+<section id="pause" class="screen hidden">
+  <div class="panel narrow">
+    <h2 data-t="paused"></h2>
+    <div class="btns col">
+      <button id="btnResume" class="btn primary" data-t="resume"></button>
+      <button id="btnRespawn" class="btn" data-t="respawn"></button>
+      <button id="btnHowto2" class="btn ghost" data-t="howto"></button>
+      <button id="btnRetire" class="btn ghost" data-t="retire"></button>
+    </div>
+  </div>
+</section>
+
+<!-- 結果 -->
+<section id="results" class="screen hidden">
+  <div class="panel wide results">
+    <div class="stamp" id="rStamp"></div>
+    <h2 data-t="results"></h2>
+    <table class="rtable"><tbody id="rBody"></tbody></table>
+    <div class="earn" id="rEarn"></div>
+    <div class="btns">
+      <button id="btnAgain" class="btn primary" data-t="again"></button>
+      <button id="btnRGarage" class="btn" data-t="toGarage"></button>
+      <button id="btnRTitle" class="btn ghost" data-t="toTitle"></button>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="js/main.js?v=1"></script>
+</body>
+</html>

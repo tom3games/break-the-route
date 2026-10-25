@@ -1,0 +1,21 @@
+// OGP 画像（1200x630）を実際のゲーム画面から作る。node tools/og.mjs
+import { chromium } from 'playwright'
+import { serveStatic } from './static.mjs'
+const srv = await serveStatic(5193)
+const b = await chromium.launch({ args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] })
+const p = await b.newPage({ viewport: { width: 1200, height: 630 }, locale: 'ja-JP' })
+await p.goto('http://localhost:5193/')
+await p.waitForFunction(() => window.__btrReady)
+await p.selectOption('#cpuSelect', '3')
+await p.click('#btnOffline')
+await p.waitForTimeout(4600)
+await p.evaluate(() => window.__btr.teleport(0, 615, 0, 50))
+await p.keyboard.down('KeyW'); await p.keyboard.down('ShiftLeft')
+await p.waitForTimeout(1500)
+await p.evaluate(() => { window.__btr.setPaused(true) })
+await p.waitForTimeout(300)
+await p.addStyleTag({ content: `#hud{display:none!important} .og{position:fixed;left:56px;bottom:52px;z-index:50;font-family:'Dela Gothic One',sans-serif;color:#fff;line-height:.9;text-shadow:0 6px 0 rgba(0,0,0,.35)} .og b{display:block;font-size:104px;color:#ff5a1f;font-weight:400} .og i{display:block;font-style:normal;font-size:104px} .og s{display:block;text-decoration:none;font-size:30px;margin-top:14px;font-family:'M PLUS 1p',sans-serif;font-weight:800;background:#f2c230;color:#14161a;padding:8px 16px;width:max-content} .og-h{position:fixed;left:56px;top:40px;width:200px;height:14px;background:repeating-linear-gradient(-45deg,#f2c230 0 12px,#14161a 12px 24px);z-index:50}` })
+await p.evaluate(() => { const d = document.createElement('div'); d.className = 'og'; d.innerHTML = '<b>BREAK</b><i>THE ROUTE</i><s>壊して、飛んで、道を作る。</s>'; document.body.appendChild(d); const h = document.createElement('div'); h.className = 'og-h'; document.body.appendChild(h) })
+await p.waitForTimeout(400)
+await p.screenshot({ path: new URL('../public/og.jpg', import.meta.url).pathname, type: 'jpeg', quality: 86 })
+await b.close(); srv.close()
