@@ -68,12 +68,12 @@ export class Audio {
     let gi = 0; while (gi < gears.length - 2 && r > gears[gi + 1]) gi++
     const within = (r - gears[gi]) / (gears[gi + 1] - gears[gi])
     const rpm = 0.35 + within * 0.65
-    const base = 48 + rpm * 120 + gi * 8 + (boosting ? 25 : 0)
+    const base = 48 + rpm * 120 + gi * 8 + (boosting ? 40 : 0)
     // 壊れたエンジンはがたつく
     const rough = (1 - engineHealth) * (Math.random() * 18)
     for (const { o, mul } of this.osc) o.frequency.setTargetAtTime((base + rough) * mul, t, 0.03)
     this.engF.frequency.setTargetAtTime(400 + throttle * 1400 + rpm * 600, t, 0.05)
-    this.eng.gain.setTargetAtTime(active ? 0.1 + throttle * 0.12 : 0, t, 0.08)
+    this.eng.gain.setTargetAtTime(active ? 0.1 + throttle * 0.12 + Math.min(0.08, r * 0.07) + (boosting ? 0.05 : 0) : 0, t, 0.08)
     this.screech.g.gain.setTargetAtTime(active && grounded && slip > 4 ? Math.min(0.22, (slip - 4) * 0.02) : 0, t, 0.06)
     this.jet.g.gain.setTargetAtTime(active && boosting ? 0.32 : 0, t, 0.05)
     this.jet.f.frequency.setTargetAtTime(700 + r * 600, t, 0.1)
@@ -107,6 +107,13 @@ export class Audio {
     this._tone({ freq: 120, to: 35, dur: 0.35, gain: 0.7 * p })
     // 金属の鳴り
     for (const f of [430, 610, 890]) this._tone({ freq: f * (0.9 + Math.random() * 0.2), to: f * 0.8, dur: 0.4, gain: 0.05 * p, type: 'triangle' })
+  }
+  // ガラスが割れる: 高い音の粒をばらばらに
+  glass(power = 1) {
+    for (let i = 0; i < 7; i++) setTimeout(() => {
+      this._burst({ freq: 4500 + Math.random() * 3500, type: 'bandpass', q: 6, dur: 0.06, gain: 0.22 * power, decay: 0.06 })
+      this._tone({ freq: 2400 + Math.random() * 2600, to: 1800, dur: 0.12, gain: 0.03 * power, type: 'triangle' })
+    }, i * 18 + Math.random() * 20)
   }
   scrape() { this._burst({ freq: 2600, type: 'bandpass', q: 3, dur: 0.15, gain: 0.12, decay: 0.12 }) }
   wood(power = 1) {

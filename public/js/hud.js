@@ -72,6 +72,22 @@ export class HUD {
     while (box.children.length > 4) box.firstChild.remove()
     setTimeout(() => d.remove(), 1700)
   }
+  // ご褒美の大きな文字（コンボが続くと x2, x3…）
+  reward(text, sub = '', combo = 1) {
+    const el = $('hReward')
+    el.innerHTML = ''
+    const b = document.createElement('b'); b.textContent = text; el.appendChild(b)
+    if (combo > 1) { const c = document.createElement('i'); c.textContent = 'x' + combo; el.appendChild(c) }
+    if (sub) { const s = document.createElement('small'); s.textContent = sub; el.appendChild(s) }
+    el.classList.remove('show'); void el.offsetWidth; el.classList.add('show')
+  }
+  flashScreen(kind) { const el = $('hFlash'); el.className = 'flashov'; void el.offsetWidth; el.classList.add(kind) }
+  speedLines(k, boost) {
+    const el = $('hSpeed')
+    const o = Math.round((boost ? Math.max(0.55, k) : k * 0.55) * 100) / 100
+    if (el._o !== o) { el._o = o; el.style.opacity = o }
+    if (el._b !== boost) { el._b = boost; el.classList.toggle('boost', !!boost) }
+  }
   flashDamage(d) { this.vig = Math.min(1, this.vig + d * 4 + 0.15) }
 
   update(race, me, dt, camera) {

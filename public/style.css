@@ -521,3 +521,25 @@ body.touch .radio { top: 54px; font-size: 12px; padding: 5px 10px; }
   #howto .pad { font-size: 10.5px; line-height: 1.4; margin: 2px 0; }
   #howto .pad.credit { font-size: 9px; }
 }
+
+/* ---------------------------------------------------------- 爽快感: 流れる線・ご褒美の文字・逮捕と逃げ切りの光 */
+.speedlines { position: absolute; inset: -12%; pointer-events: none; opacity: 0; transition: opacity .25s;
+  background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(255,255,255,0) 0deg 4deg, rgba(255,255,255,0.5) 4.3deg, rgba(255,255,255,0) 4.8deg 11deg);
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 50%, transparent 55%, #000 100%); mask-image: radial-gradient(ellipse 60% 55% at 50% 50%, transparent 55%, #000 100%);
+  animation: slFlick .14s steps(2) infinite; }
+.speedlines.boost { background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(127,212,255,0) 0deg 3deg, rgba(190,235,255,0.75) 3.3deg, rgba(127,212,255,0) 3.8deg 8deg);
+  -webkit-mask-image: radial-gradient(ellipse 55% 50% at 50% 50%, transparent 45%, #000 100%); mask-image: radial-gradient(ellipse 55% 50% at 50% 50%, transparent 45%, #000 100%); }
+@keyframes slFlick { 50% { transform: rotate(1.6deg) scale(1.02) } }
+.reward { position: absolute; left: 0; right: 0; top: 15%; text-align: center; pointer-events: none; opacity: 0; color: #ffd23a; transform: skewX(-10deg); }
+.reward b { font-family: var(--f-head); font-weight: 400; font-size: clamp(30px, 6vw, 66px); letter-spacing: 0.02em; text-shadow: 0 4px 0 #a8350d, 0 0 24px rgba(255,140,40,0.8); }
+.reward i { font-style: normal; font-family: var(--f-num); font-weight: 700; font-size: clamp(22px, 4vw, 42px); color: #fff; margin-left: 10px; text-shadow: 0 3px 0 #a8350d; }
+.reward small { display: block; font: 700 clamp(12px, 1.6vw, 18px) var(--f-num); color: #fff; text-shadow: 0 2px 4px #000; margin-top: 2px; }
+.reward.show { animation: rewardPop 1.3s ease-out forwards; }
+@keyframes rewardPop { 0% { opacity: 0; transform: skewX(-10deg) scale(2.2) } 12% { opacity: 1; transform: skewX(-10deg) scale(0.95) } 20% { transform: skewX(-10deg) scale(1) } 80% { opacity: 1 } 100% { opacity: 0; transform: skewX(-10deg) translateY(-18px) } }
+body.touch .reward { top: 30%; }
+@media (orientation: portrait) { body.touch .reward { top: 40%; } }
+.flashov { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+.flashov.bust { animation: bustFlash 1.5s ease-out; }
+.flashov.escape { animation: escFlash 1.3s ease-out; background: radial-gradient(circle at 50% 55%, rgba(255,215,0,0.55), rgba(255,140,0,0) 70%); }
+@keyframes bustFlash { 0%, 30%, 60% { opacity: 0.55; background: rgba(255,30,60,0.45) } 15%, 45%, 75% { opacity: 0.55; background: rgba(40,110,255,0.45) } 100% { opacity: 0 } }
+@keyframes escFlash { 0% { opacity: 1 } 100% { opacity: 0 } }

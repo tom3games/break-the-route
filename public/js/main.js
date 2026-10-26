@@ -279,7 +279,7 @@ let msgTimer = 0
 let demoSwitch = 0
 let copLastRadio = -1
 
-const cam = { pos: new THREE.Vector3(0, 10, -20), look: new THREE.Vector3(), fov: 64 }
+const cam = { pos: new THREE.Vector3(0, 10, -20), look: new THREE.Vector3(), off: new THREE.Vector3(0, 3.5, -9), lookOff: new THREE.Vector3(0, 1, 0), hd: 0, fov: 64 }
 
 function startRace({ demo = false, view = null } = {}) {
   // 前の車を片付ける
@@ -505,7 +505,8 @@ const seenStrikes = new Set()
 function snapCamera() {
   const c = follow
   const fx_ = Math.sin(c.yaw), fz = Math.cos(c.yaw)
-  cam.pos.set(c.x - fx_ * 9, c.y + 3.5, c.z - fz * 9)
+  cam.off.set(-fx_ * 9, 3.5, -fz * 9); cam.lookOff.set(0, 1, 0); cam.hd = c.yaw
+  cam.pos.set(c.x + cam.off.x, c.y + cam.off.y, c.z + cam.off.z)
   cam.look.set(c.x, c.y + 1, c.z)
 }
 
@@ -863,7 +864,17 @@ function handleEvents(e) {
         if (vol) audio.crash(Math.min(1.2, ev.speed / 18) * vol)
         fx.sparks(ev.x ?? c.x, (ev.y ?? c.y) + 0.2, ev.z ?? c.z, Math.min(30, 6 + ev.speed * 1.5))
         if (ev.speed > 10) fx.flash(ev.x ?? c.x, (ev.y ?? c.y) + 0.3, ev.z ?? c.z)
-        if (mine || ev.other === myId) fx.addShake(Math.min(0.9, ev.speed / 22))
+        if (mine || ev.other === myId) {
+          fx.addShake(Math.min(0.9, ev.speed / 22))
+          juice.hitAt = race.t
+          // 手応え: 強く当てた瞬間だけ一瞬止める
+          if (ev.speed > 10) hitStop(Math.min(0.09, ev.speed * 0.003))
+          if (ev.speed > 14) for (let i = 0; i < 6; i++) fx.emit(ev.x ?? c.x, (ev.y ?? c.y) + 0.5, ev.z ?? c.z, { vx: (Math.random() - 0.5) * 12, vy: 3 + Math.random() * 5, vz: (Math.random() - 0.5) * 12, life: 0.6, size: 0.35, grow: 0, r: 0.75, g: 0.85, b: 0.95, a: 0.9 })
+        }
+        break
+      case 'takeoff':
+        // 大きく飛んだ瞬間を短くスローで見せる
+        if (mine && speedOf(c) > 28 && c.vy > 3) slowMo(0.5, 0.4)
         break
       case 'land':
         if (ev.air > 0.35) {
@@ -873,7 +884,7 @@ function handleEvents(e) {
           if (mine) {
             fx.addShake(Math.min(1, ev.impact / 30))
             if (ev.crash) hud.message(t('msgCrash'), '', 1.4)
-            else if (ev.air > 1.1) hud.message(t('msgBigAir'), ev.air.toFixed(1) + 's', 1.2)
+            else if (ev.air > 1.1) reward(t('msgBigAir'), ev.air.toFixed(1) + 's', 0.12)
             if (ev.dmg > 0) hud.flashDamage(ev.dmg)
           }
           if (ev.sev > 0) fx.sparks(c.x, c.y - 0.4, c.z, Math.min(30, ev.sev * 2))
@@ -931,7 +942,7 @@ function frame() {
 
   if (race && onlineRace) syncOnline()
   if (race && !paused) {
-    acc += dt
+    acc += dt * juiceScale(dt)
     const airborne = me ? !me.grounded : false
     let inp = me ? input.read(airborne) : null
     if (me && autopilot) {
@@ -955,6 +966,7 @@ function frame() {
       for (const ev of race.events) raceEvent(ev)
       race.events.length = 0
     }
+    nearMiss()
     if (steps >= 6) acc = 0
     lastFrameInp = inp
     if (onlineRace && online) online.tick(dt, me, race.t)
@@ -1090,7 +1102,12 @@ function raceEvent(ev) {
   const myE = race.entry(myId)
   const cop = myE && myE.role === 'cop'
   if (ev.t === 'takedown') {
-    if (ev.id === myId) { audio.crash(1.2); hud.message(t('takedown'), race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
+    if (ev.id === myId) {
+      audio.crash(1.2); audio.glass(1)
+      reward(t('takedown'), (race.entry(ev.victim)?.car.name || '') + '  +35% NITRO', 0)
+      // パトカーを潰した瞬間はスロー
+      if (ev.kind !== 'knock') { hitStop(0.08); slowMo(0.3, 0.9); fx.addShake(1.2) }
+    }
     else if (ev.victim === myId && ev.kind !== 'knock') fx.addShake(1)
   }
   if (ev.t === 'copDown') {
@@ -1104,7 +1121,11 @@ function raceEvent(ev) {
     fx.sparks(ev.x, ev.y, ev.z, 20, null, 10); fx.flash(ev.x, ev.y + 0.3, ev.z)
     const near = Math.hypot(me.x - ev.x, me.z - ev.z)
     if (near < 80) audio.crash(Math.min(1.2, ev.rel / 25 + 0.3) * (1 - near / 80))
-    if (ev.id === myId) { hud.feed('CRASH', '+4% NITRO'); fx.addShake(0.35) }
+    if (ev.id === myId) {
+      hud.feed('CRASH', '+4% NITRO'); fx.addShake(0.5); juice.hitAt = race.t
+      hitStop(Math.min(0.07, 0.02 + ev.rel * 0.0015)); audio.glass(Math.min(1, ev.rel / 30 + 0.3))
+      for (let i = 0; i < 8; i++) fx.emit(ev.x, ev.y + 0.6, ev.z, { vx: (Math.random() - 0.5) * 14, vy: 2 + Math.random() * 6, vz: (Math.random() - 0.5) * 14, life: 0.7, size: 0.3, grow: 0, r: 0.8, g: 0.9, b: 1, a: 0.9 })
+    }
   }
   if (ev.t === 'ping' && cop) {
     hud.radio((ev.heading ? t('radioSeen') : t('radioSeenStop')).replace('{area}', trArea(ev.area)).replace('{dir}', trDir(ev.heading)))
@@ -1120,6 +1141,9 @@ function raceEvent(ev) {
     if (r) { fx.flash(r.car.x, r.car.y + 1, r.car.z); for (let i = 0; i < 6; i++) fx.smoke(r.car.x, r.car.y + 0.5, r.car.z, { dark: 0.5, size: 2, life: 1.6, vy: 2, a: 0.5 }) }
     if (ev.id === myId) { hud.message(t('msgCaught'), '', 2.6); audio.crash(1) }
     else if (cop) { hud.message(t('msgBusted'), r ? r.car.name : '', 2.6); audio.fanfare() }
+    // 逮捕: スローと赤青の光
+    slowMo(0.3, 1.5); hud.flashScreen('bust'); fx.addShake(1)
+    if (r) for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2; fx.emit(r.car.x, r.car.y + 0.8, r.car.z, { vx: Math.cos(a) * 10, vy: 1 + Math.random() * 3, vz: Math.sin(a) * 10, life: 0.8, size: 1.2, grow: 1.5, r: i % 2 ? 1 : 0.2, g: 0.2, b: i % 2 ? 0.25 : 1, a: 0.9, add: true }) }
   }
   if (ev.t === 'heli') { hud.radio(cop ? t('radioHeliCop') : t('radioHeliRobber'), 3.2); audio.radio() }
   if (ev.t === 'strikeWarn') {
@@ -1146,6 +1170,52 @@ function raceEvent(ev) {
   if (ev.t === 'escape') {
     if (ev.id === myId) { hud.message(t('msgEscaped'), ev.reason === 'hideout' ? t('winByHideout') : t('winByTime'), 2.6); audio.fanfare() }
     else if (cop) hud.message(t('msgLost'), '', 2.6)
+    // 逃げ切り: スローと金色の紙吹雪
+    slowMo(0.4, 1.3); hud.flashScreen('escape')
+    const r = race.entry(ev.id)
+    if (r) for (let i = 0; i < 70; i++) fx.emit(r.car.x + (Math.random() - 0.5) * 4, r.car.y + 2, r.car.z + (Math.random() - 0.5) * 4, { vx: (Math.random() - 0.5) * 16, vy: 6 + Math.random() * 10, vz: (Math.random() - 0.5) * 16, life: 1.6, size: 0.5, grow: 0, r: 1, g: 0.6 + Math.random() * 0.4, b: Math.random() * 0.5, a: 1, add: true })
+  }
+}
+
+// ---------------------------------------------------------------- 爽快感（ヒットストップ・スロー・ご褒美の文字とコンボ）
+// スローとヒットストップはオフラインだけ（オンラインは全員の時計が同じなので見た目だけ）
+const juice = { stop: 0, slow: 0, slowK: 1, combo: 0, comboT: 0, hitAt: -9, near: new Map(), cool: new Map() }
+function hitStop(sec) { if (!onlineRace) juice.stop = Math.max(juice.stop, sec) }
+function slowMo(k, sec) { if (!onlineRace) { juice.slow = Math.max(juice.slow, sec); juice.slowK = k } }
+function juiceScale(dt) {
+  juice.comboT = Math.max(0, juice.comboT - dt)
+  if (juice.stop > 0) { juice.stop -= dt; return 0.03 }
+  if (juice.slow > 0) { juice.slow -= dt; return juice.slowK }
+  return 1
+}
+function reward(text, sub = '', nitro = 0) {
+  juice.combo = juice.comboT > 0 ? juice.combo + 1 : 1
+  juice.comboT = 4
+  const mul = 1 + 0.5 * Math.min(3, juice.combo - 1)
+  if (nitro && me) { me.boost = Math.min(1, me.boost + nitro * mul); me.boostLock = false }
+  hud.reward(text, [sub, nitro ? `+${Math.round(nitro * mul * 100)}% NITRO` : ''].filter(Boolean).join('  '), juice.combo)
+  audio.cp()
+}
+// ニアミス: 速く走っていて、一般車や他の車の真横 2〜3.6m をかすめて当たらなかった
+function nearMiss() {
+  if (!me || !race || race.phase !== 'racing' || me.wreck > 0) return
+  const v = speedOf(me)
+  const fx_ = Math.sin(me.yaw), fz = Math.cos(me.yaw)
+  const look = (o, id, ov) => {
+    const dx = o.x - me.x, dz = o.z - me.z
+    if (dx * dx + dz * dz > 36) return
+    const along = dx * fx_ + dz * fz, side = Math.abs(dx * fz - dz * fx_)
+    const rel = Math.abs(v - ov)
+    if (Math.abs(along) < 2.6 && side > 1.9 && side < 3.6 && rel > 10 && !(juice.cool.get(id) > race.t)) juice.near.set(id, race.t + 0.35)
+  }
+  if (v > 24) {
+    if (race.traffic) for (const o of race.traffic.cars) look(o, o.id, o.speed || 0)
+    for (const e of race.entries) if (e.car !== me && !e.car.wreck) look(e.car, e.id, speedOf(e.car))
+  }
+  for (const [id, at] of juice.near) if (race.t >= at) {
+    juice.near.delete(id)
+    juice.cool.set(id, race.t + 3)
+    if (race.t - juice.hitAt > 0.6) reward('NEAR MISS', '', 0.06)
   }
 }
 
@@ -1172,12 +1242,17 @@ function updateCamera(dt) {
     hx = hx * (1 - k) + (c.vx / v) * k; hz = hz * (1 - k) + (c.vz / v) * k
     const l = Math.hypot(hx, hz); hx /= l; hz /= l
   }
+  // 向きはなめらかに追う（位置は車にぴったり付ける。速いほど遠くに置いていかれる遅れを無くした）
+  cam.hd = lerpAngle(cam.hd, Math.atan2(hx, hz), 1 - Math.exp(-dt * 7))
+  hx = Math.sin(cam.hd); hz = Math.cos(cam.hd)
   // レースゲームの定番: 車のすぐ後ろ・低い位置から前を水平に見る（0）/ 少し引き（1）/ ボンネット（2）
-  const presets = [[3.25, 1.15], [6.0, 2.0], [0, 0]]
+  // 2026-10-26 本人「カメラの距離を近く」: 近い 3.25/1.15→2.85/1.05、引き 6.0/2.0→5.2/1.8（加えて速さによる置いていかれを無くした）
+  const presets = [[2.85, 1.05], [5.2, 1.8], [0, 0]]
   let [back0, up0] = presets[camMode]
   // 縦長の画面は上が空ばかりになるので、少し高くから見下ろす
-  if (camera.aspect < 1 && camMode !== 2) { back0 += 0.4; up0 += 0.45 }
-  let back = back0 + Math.min(0.7, v * 0.01), up = up0
+  if (camera.aspect < 1 && camMode !== 2) { back0 += 0.3; up0 += 0.35 }
+  // 速いほど少し引く（スピード感）
+  let back = back0 + Math.min(1.2, v * 0.026), up = up0
   // カウントダウン中は前から回り込む
   if (race && race.phase === 'countdown' && c === me) {
     const k = Math.max(0, Math.min(1, (-race.t - 0.6) / (GAME.countdownSec - 0.6)))
@@ -1209,10 +1284,11 @@ function updateCamera(dt) {
   const gy = world.groundAt(tx, tz, ty).h + 0.8
   if (ty < gy) ty = gy
   const k = 1 - Math.exp(-dt * 10)
-  _v.set(tx, ty, tz)
-  cam.pos.lerp(_v, k)
-  _l.set(pos.x + hx * 10, pos.y + (camera.aspect < 1 ? 0.2 : 1.0), pos.z + hz * 10)
-  cam.look.lerp(_l, 1 - Math.exp(-dt * 12))
+  cam.off.lerp(_v.set(tx - pos.x, ty - pos.y, tz - pos.z), k)
+  cam.pos.set(pos.x + cam.off.x, pos.y + cam.off.y, pos.z + cam.off.z)
+  cam.lookOff.lerp(_v.set(hx * 10, camera.aspect < 1 ? 0.2 : 1.0, hz * 10), 1 - Math.exp(-dt * 12))
+  cam.look.set(pos.x + cam.lookOff.x, pos.y + cam.lookOff.y, pos.z + cam.lookOff.z)
+  if (cam.pos.y < gy) cam.pos.y = gy
   if (camMode === 2 && m && !(race && race.phase === 'countdown')) {
     // ボンネットの上（車体の傾きに合わせる）
     m.group.updateMatrixWorld()
@@ -1220,14 +1296,18 @@ function updateCamera(dt) {
     cam.look.copy(m.group.localToWorld(_l.set(0, 0.65, 12)))
   }
   camera.position.copy(cam.pos)
+  // ニトロ中は小刻みに揺れ、流れる線を出す
+  if (c === me && c.boosting && !paused) fx.shake = Math.max(fx.shake, 0.12)
+  hud.speedLines(c === me && camMode !== 2 ? Math.max(0, Math.min(1, (v - 30) / 16)) : 0, c === me && c.boosting)
   // 揺れ
   const sh = fx.shake
   if (sh > 0) camera.position.add(_v.set((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh * 0.7, (Math.random() - 0.5) * sh))
   camera.lookAt(cam.look)
   // 縦長の画面では横の見える幅が狭くならないよう縦の画角を広げる
   const asp = camera.aspect
-  const base = asp >= 1 ? 58 : Math.min(90, 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(40)) / asp) * 180 / Math.PI)
-  const fov = base + Math.min(10, v * 0.12) + (c.boosting ? (c.perfect ? 10 : 6) : 0)
+  const base = asp >= 1 ? 58 : Math.min(84, 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(36)) / asp) * 180 / Math.PI)
+  // 速さで視野が広がる（スピード感）。ニトロ中はさらに
+  const fov = base + Math.min(14, v * 0.3) + (c.boosting ? (c.perfect ? 12 : 8) : 0)
   cam.fov += (fov - cam.fov) * (1 - Math.exp(-dt * 4))
   camera.fov = cam.fov
   camera.updateProjectionMatrix()
@@ -1424,7 +1504,7 @@ addEventListener('pointerdown', () => audio.start(), { once: true })
 // 検証用の窓口（本番の操作には使わない）
 window.__btr = {
   get world() { return world }, get race() { return race }, get me() { return me }, get mode() { return mode }, profile, startOffline: beginPlayerRace,
-  get online() { return online }, get myId() { return myId }, get camMode() { return camMode },
+  get online() { return online }, get myId() { return myId }, get camMode() { return camMode }, juice,
   setPaused: p => { paused = p }, fx, camera, renderer,
   autopilot() {
     if (!me) return
