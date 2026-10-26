@@ -233,3 +233,40 @@ test('警察ヘリ: 手配度3で現れ、赤い円で予告してから1.8秒�
   assert.deepEqual(b2.hit, [], '避けたら当たらない')
   assert.equal(rob.dmg.body, 1)
 })
+
+test('警察車: 犯人の全力の体当たり2〜3回で大破し、その場で燃えて数秒残ってから犯人から離れた交差点へ戻る。手配度が上がる', () => {
+  const { ch, rob, copCars } = chase()
+  run(ch, GAME.countdownSec + 0.1)
+  const cop = copCars[0], ce = ch.entry('c0')
+  // 長い直線（交差点から120m以上先の交差点へ）
+  const n = ch.nav.list.find(n => n.adj.some(a => { const b = ch.nav.nodes.get(a); return Math.hypot(b.x - n.x, b.z - n.z) > 120 }))
+  const b = ch.nav.nodes.get(n.adj.find(a => { const b = ch.nav.nodes.get(a); return Math.hypot(b.x - n.x, b.z - n.z) > 120 }))
+  const yaw = Math.atan2(b.x - n.x, b.z - n.z), fx = Math.sin(yaw), fz = Math.cos(yaw)
+  const place = (c, d, v) => { c.x = n.x + fx * d; c.z = n.z + fz * d; c.y = 0.6 + ch.world.groundAt(c.x, c.z, 5).h; c.yaw = yaw; c.vx = fx * v; c.vz = fz * v; c.vy = 0; c.wreck = 0; c.freeze = 0; c.knock = false; c.pitch = c.roll = 0 }
+  const heat0 = ch.heatBonus
+  let rams = 0, down = null
+  for (; rams < 6 && !down; rams++) {
+    place(cop, 70, 0); place(rob, 0, 44)
+    for (let i = 0; i < 120 && !down; i++) {
+      ch.stepFixed(DT, { r: { throttle: 1 }, c0: {} })
+      down = ch.events.find(e => e.t === 'copDown')
+      ch.events.length = 0
+      for (const e of ch.entries) e.car.events.length = 0
+    }
+  }
+  assert.ok(down, '大破しない')
+  assert.ok(rams >= 2 && rams <= 3, `体当たり ${rams} 回`)
+  assert.ok(ch.heatBonus > heat0, '手配度が上がらない')
+  assert.ok(ch.entry('r').takedowns >= 1)
+  // 数秒その場に残る
+  const x0 = cop.x, z0 = cop.z
+  rob.x += 300; run(ch, CHASE.copWreckSec - 1, { r: {}, c0: {} })
+  assert.ok(cop.wreck > 0 && Math.hypot(cop.x - x0, cop.z - z0) < 15, '早く戻りすぎ')
+  run(ch, 2.5, { r: {}, c0: {} })
+  assert.equal(cop.wreck, 0)
+  const d = Math.hypot(cop.x - rob.x, cop.z - rob.z)
+  assert.ok(d >= CHASE.copBackMin - 5, `犯人から ${d.toFixed(0)}m に戻った`)
+  assert.ok(cop.dmg.body > 0.5, '直って戻る')
+  // 警察が犯人に当てても自分は壊れにくい（6回で大破しない）
+  assert.ok(ce)
+})

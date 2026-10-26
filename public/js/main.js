@@ -476,6 +476,12 @@ function applyChaseSummary(ch) {
     for (const s of ch.strikes) if (!seenStrikes.has(s.id)) { seenStrikes.add(s.id); race.events.push({ t: 'strikeWarn', ...s }) }
     race.strikes = ch.strikes
   }
+  for (const d of ch.downs || []) {
+    const k = 'd' + d.id + '@' + d.at
+    if (seenStrikes.has(k) || d.id === myId) continue
+    seenStrikes.add(k)
+    race.events.push({ t: 'copDown', ...d })
+  }
   for (const b of ch.blasts || []) {
     if (seenStrikes.has('b' + b.id)) continue
     seenStrikes.add('b' + b.id)
@@ -985,6 +991,11 @@ function frame() {
       const v = speedOf(c)
       const fwx = Math.sin(c.yaw), fwz = Math.cos(c.yaw)
       if (c.dmg.engine < 0.55 && Math.random() < (0.55 - c.dmg.engine) * 1.6) fx.smoke(c.x + fwx * 1.4, c.y + 0.6, c.z + fwz * 1.4, { dark: 0.15 + c.dmg.engine * 0.5, size: 1.4, life: 1.4, vy: 2 })
+      // 大破した警察車は復帰までその場で燃える
+      if (c.wreck > 0 && c.wreckSec && !c.knock && !c.falling) {
+        if (Math.random() < 0.8) fx.emit(c.x + (Math.random() - 0.5) * 2, c.y + 0.6, c.z + (Math.random() - 0.5) * 3, { vx: (Math.random() - 0.5) * 1.5, vy: 3 + Math.random() * 2, vz: (Math.random() - 0.5) * 1.5, life: 0.5 + Math.random() * 0.3, size: 1.3, grow: 1.6, r: 1, g: 0.45 + Math.random() * 0.25, b: 0.1, a: 0.9, add: true })
+        if (Math.random() < 0.5) fx.smoke(c.x, c.y + 1.5, c.z, { dark: 0.08, size: 2.4, life: 2.2, vy: 3.5, a: 0.6 })
+      }
       if (c.overheat && Math.random() < 0.5) fx.smoke(c.x + fwx * 1.8, c.y + 0.5, c.z + fwz * 1.8, { dark: 0.85, size: 1.2, life: 0.9, vy: 2.5, a: 0.4 })
       if (c.grounded && c.drifting && c.slip > 5 && Math.random() < 0.6) {
         for (const sx of [-0.8, 0.8]) fx.smoke(c.x - fwx * 1.6 + Math.cos(c.yaw) * sx, c.y - 0.45, c.z - fwz * 1.6 - Math.sin(c.yaw) * sx, { dark: 0.8, size: 1.0, life: 0.9, vy: 0.5, a: 0.2 })
@@ -1081,6 +1092,12 @@ function raceEvent(ev) {
   if (ev.t === 'takedown') {
     if (ev.id === myId) { audio.crash(1.2); hud.message(t('takedown'), race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
     else if (ev.victim === myId && ev.kind !== 'knock') fx.addShake(1)
+  }
+  if (ev.t === 'copDown') {
+    if (cop && ev.id !== myId) { hud.radio(t('radioCopDown'), 2.6); audio.radio() }
+    if (ev.id === myId) hud.message(t('msgCopDown'), t('msgCopDownSub').replace('{n}', Math.round(CHASE.copWreckSec)), 2.2)
+    const near = Math.hypot(me.x - ev.x, me.z - ev.z)
+    if (near < 120) audio.explosion(Math.max(0.2, 1 - near / 120))
   }
   if (ev.t === 'pickup' && ev.id === myId) { hud.feed('NITRO', '+30%'); audio.cp() }
   if (ev.t === 'smash') {
@@ -1407,7 +1424,7 @@ addEventListener('pointerdown', () => audio.start(), { once: true })
 // 検証用の窓口（本番の操作には使わない）
 window.__btr = {
   get world() { return world }, get race() { return race }, get me() { return me }, get mode() { return mode }, profile, startOffline: beginPlayerRace,
-  get online() { return online }, get myId() { return myId },
+  get online() { return online }, get myId() { return myId }, get camMode() { return camMode },
   setPaused: p => { paused = p }, fx, camera, renderer,
   autopilot() {
     if (!me) return

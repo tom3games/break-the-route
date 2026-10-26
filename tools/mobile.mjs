@@ -57,6 +57,17 @@ for (const engine of process.argv.includes('--all') ? [webkit, chromium] : [webk
   await p.screenshot({ path: OUT + tag + '-race.png' })
   await press('[data-k=right]', 'pointerup')
   await press('[data-k=gas]', 'pointerup')
+  // カメラボタン: 押すたびに 近い→引き→ボンネット→近い と切り替わり、画面の視点も動く
+  const cams = []
+  for (let i = 0; i < 3; i++) {
+    const before = await p.evaluate(() => ({ m: window.__btr.camMode, x: window.__btr.camera.position.x, y: window.__btr.camera.position.y, z: window.__btr.camera.position.z }))
+    await press('[data-k=cam]', 'pointerdown'); await press('[data-k=cam]', 'pointerup')
+    await p.waitForTimeout(500)
+    const after = await p.evaluate(() => { const c = window.__btr.camera.position, m = window.__btr.me; return { m: window.__btr.camMode, x: c.x, y: c.y, z: c.z, d: Math.hypot(c.x - m.x, c.z - m.z) } })
+    cams.push(`${before.m}->${after.m}(${after.d.toFixed(1)}m)`)
+    if (after.m !== (before.m + 1) % 3) { cams.push('NG'); break }
+  }
+  ok(!cams.includes('NG') && cams.length === 3, tag + ' カメラボタンで視点が3通り切り替わる', cams.join(' '))
   // 操作部品が画面からはみ出していないか・重なっていないか
   const lay = await p.evaluate(() => {
     const rs = ['[data-k=left]', '[data-k=right]', '[data-k=gas]', '[data-k=brake]', '[data-k=boost]', '[data-k=drift]', '[data-k=pause]', '[data-k=cam]', '[data-k=respawn]', '#miniMap', '.hud-br', '.hud-tl', '.hud-top'].map(s => [s, document.querySelector(s).getBoundingClientRect()])

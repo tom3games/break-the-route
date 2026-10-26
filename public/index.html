@@ -8,7 +8,7 @@
 <meta property="og:title" content="BREAK THE ROUTE">
 <meta property="og:description" content="警察と犯人の3Dカーチェイス。逃げ切るか、捕まえるか。スマホのブラウザで遊べる。">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://tom3games.github.io/break-the-route/og.jpg?v=7">
+<meta property="og:image" content="https://tom3games.github.io/break-the-route/og.jpg?v=8">
 <meta property="og:url" content="https://tom3games.github.io/break-the-route/">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Dela+Gothic+One&family=M+PLUS+1p:wght@500;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 <script>
   // 起動に失敗したときに原因を画面に出す（モジュールが読めないと module 内の catch は動かない）
   window.__btrErrors = []
@@ -231,18 +231,19 @@
 <section id="results" class="screen hidden">
   <div class="panel wide results">
     <div class="stamp" id="rStamp"></div>
-    <h2 id="rTitle"></h2>
-    <p class="reason" id="rReason"></p>
+    <div class="rhead"><h2 id="rTitle"></h2><p class="reason" id="rReason"></p></div>
     <table class="rtable"><tbody id="rBody"></tbody></table>
-    <div class="earn" id="rEarn"></div>
-    <div class="btns">
-      <button id="btnAgain" class="btn primary" data-t="again"></button>
-      <button id="btnRGarage" class="btn" data-t="toGarage"></button>
-      <button id="btnRTitle" class="btn ghost" data-t="toTitle"></button>
+    <div class="rfoot">
+      <div class="earn" id="rEarn"></div>
+      <div class="btns">
+        <button id="btnAgain" class="btn primary" data-t="again"></button>
+        <button id="btnRGarage" class="btn" data-t="toGarage"></button>
+        <button id="btnRTitle" class="btn ghost" data-t="toTitle"></button>
+      </div>
     </div>
   </div>
 </section>
 
-<script type="module" src="js/main.js?v=7"></script>
+<script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

@@ -388,3 +388,136 @@ body.touch .radio { top: 54px; font-size: 12px; padding: 5px 10px; }
   #howto .keys tr:nth-child(6) { display: none; }
   #howto #fullMap { max-height: 420px; width: auto; }
 }
+
+/* ---------------------------------------------------------- 小さい画面: ガレージ・ロビー・遊び方・結果を枠の中のスクロールなしで一画面に収める */
+@media (max-width: 760px), (max-height: 600px) {
+  .panel-head { gap: 10px; padding-bottom: 8px; }
+  .panel-head h2 { font-size: 21px; }
+  .credits b { font-size: 18px; }
+  /* ガレージ: 車3台を横一列、塗装と見本を横並び、改造は1行ずつ */
+  #garage .panel { padding-top: 12px; padding-bottom: 12px; }
+  #garage .garage-grid { gap: 10px 14px; margin-top: 8px; }
+  #garage .garage-grid > div:first-child { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; align-content: start; }
+  #garage .garage-grid h3 { display: none; }
+  #garage .car-cards { grid-column: 1 / -1; gap: 6px; }
+  .car-card { padding: 6px 8px; }
+  .car-card b { font-size: 13px; }
+  .car-card span { font-size: 10px; line-height: 1.35; margin-top: 2px; }
+  .paints { display: grid; grid-template-columns: repeat(4, 24px); gap: 6px; }
+  .paints button { width: 24px; height: 24px; }
+  #carPreview { margin: 0; width: auto; max-width: 100%; height: 54px; justify-self: center; }
+  .stats { gap: 2px; margin-top: 0; }
+  .stat { grid-template-columns: 64px 1fr 38px; gap: 8px; font-size: 11px; line-height: 13px; }
+  .stat .bar { height: 6px; }
+  .stat b { font-size: 11px; }
+  #garage .garage-grid > div:last-child { display: flex; flex-direction: column; gap: 8px; }
+  .upgrades { grid-template-columns: 1fr; gap: 3px; }
+  .upg { padding: 3px 8px; gap: 1px 8px; align-items: center; }
+  .upg .nm { font-size: 12px; gap: 6px; white-space: nowrap; }
+  .pips i { width: 9px; height: 5px; }
+  .upg .tr { font-size: 9.5px; line-height: 1.3; white-space: nowrap; }
+  .upg .act { gap: 4px; }
+  .upg .act .btn { min-height: 26px; padding: 0 9px; font-size: 12px; white-space: nowrap; }
+  .upg .cost { font-size: 12px; min-width: 34px; }
+  /* ロビー */
+  .lead { font-size: 13px; line-height: 1.55; margin: 8px 0; }
+  .join-row, .invite, .lobby-row { margin-top: 8px; }
+  .join-row input { font-size: 20px; padding: 5px; }
+  .room-code { margin-top: 8px; }
+  .room-code b { font-size: 30px; }
+  .plist { margin-top: 8px; gap: 4px; }
+  .plist li { padding: 4px 10px; font-size: 13px; }
+  .plist li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lobby-row .carpick button { padding: 7px 4px; }
+  .wait { margin-top: 8px; font-size: 13px; }
+  .err { min-height: 0; margin: 4px 0 0; }
+  /* 結果 */
+  .stamp { font-size: 28px; padding: 3px 12px; border-width: 4px; top: -12px; right: 14px; }
+  .results h2 { font-size: 22px; }
+  .rtable { margin: 8px 0; font-size: 13px; }
+  .rtable td { padding: 4px 8px; }
+  .rtable td.n { width: 34px; }
+  .rtable td.n svg { width: 20px; height: 20px; }
+  .rtable td.s { font-size: 11px; }
+  .earn { font-size: 15px; min-height: 20px; }
+}
+/* 横持ち: ガレージとロビーは2列 */
+@media (max-height: 600px) and (orientation: landscape) {
+  /* 左に 車・塗装・見本・性能、右に改造6つ */
+  #garage .garage-grid { grid-template-columns: auto 1fr 1.3fr; grid-template-rows: auto auto 1fr; align-items: start; }
+  #garage .garage-grid > div:first-child, #garage .garage-grid > div:last-child { display: contents; }
+  #garage .car-cards { grid-column: 1 / 3; grid-row: 1; }
+  #garage .paints { grid-column: 1; grid-row: 2; }
+  #garage #carPreview { grid-column: 2; grid-row: 2; align-self: center; }
+  #garage .stats { grid-column: 1 / 3; grid-row: 3; }
+  #garage .upgrades { grid-column: 3; grid-row: 1 / 4; }
+  .panel.lobby { width: min(760px, 100%); }
+  #lobbyRoom:not(.hidden) { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; align-items: start;
+    grid-template-areas: "code car" "invite host" "leave host" "list list"; }
+  #lobbyRoom .room-code { grid-area: code; }
+  #lobbyRoom .invite { grid-area: invite; }
+  #lobbyRoom > .btns { grid-area: leave; margin-top: 8px; }
+  #lobbyRoom .lobby-row:not(.host-only) { grid-area: car; }
+  #lobbyRoom .host-only, #lobbyRoom .wait { grid-area: host; }
+  #lobbyRoom .plist { grid-area: list; grid-template-columns: 1fr 1fr; }
+  #lobbyRoom:not(.hidden) { row-gap: 6px; }
+  #lobbyRoom > * { margin-top: 0; margin-bottom: 0; }
+  #lobbyRoom .btn { min-height: 32px; }
+  #lobbyRoom > .btns .btn { flex: 0 1 auto; }
+  #lobbyRoom .btn.small { white-space: nowrap; }
+  #lobbyRoom .field { margin: 0; flex-direction: row; align-items: center; gap: 6px; }
+  #lobbyRoom .field select { padding: 4px 8px; font-size: 15px; }
+  #lobbyRoom .invite input { padding: 6px 8px; }
+  #lobbyRoom .room-code b { font-size: 26px; line-height: 1.1; }
+  #lobbyRoom .plist li { padding: 2px 8px; font-size: 12px; }
+  #lobbyEntry .btns { margin-top: 4px; }
+  /* 結果: 見出しと理由を1行、獲得とボタンを1行 */
+  .results .rhead { display: flex; align-items: baseline; justify-content: center; gap: 14px; }
+  .results .reason { margin: 0; }
+  .results .rfoot { display: flex; align-items: center; gap: 12px; }
+  .results .rfoot .earn { flex: 0 0 auto; }
+  .results .rfoot .btns { flex: 1; margin-top: 0; }
+}
+/* 低い横画面: 余白を詰める */
+@media (max-height: 400px) {
+  .panel { max-height: calc(100dvh - 16px); padding: 10px 14px; }
+  .screen { padding: 8px; }
+  .panel-head .btn.small { min-height: 30px; }
+  .rtable td { padding: 2px 8px; }
+  .results h2 { font-size: 19px; }
+  .stat { line-height: 12px; }
+  #carPreview { height: 40px; }
+  .panel-head h2 { font-size: 18px; }
+  .paints { grid-template-columns: repeat(8, 18px); gap: 5px; }
+  .paints button { width: 18px; height: 18px; }
+  .car-card { padding: 4px 7px; }
+  .upg { padding: 2px 8px; }
+  .upg .nm { font-size: 11.5px; line-height: 14px; }
+  .upg .tr { font-size: 9px; line-height: 11px; }
+  .upg .act .btn { min-height: 24px; }
+  #garage .garage-grid { row-gap: 5px; margin-top: 6px; }
+  .stats { gap: 1px; }
+  .stat > span { line-height: 12px; }
+  .car-card span { font-size: 9.5px; line-height: 1.25; }
+}
+/* 遊び方: 小さい画面 */
+@media (max-height: 500px) and (orientation: landscape) {
+  #howto .howto-list { column-count: 3; column-gap: 16px; font-size: 11px; line-height: 1.38; }
+  #howto .howto-list li { margin-bottom: 4px; }
+}
+@media (max-width: 760px) and (orientation: portrait) {
+  #howto .panel { padding: 14px 16px; }
+  #howto .howto-list { font-size: 12px; line-height: 1.45; gap: 5px; }
+}
+@media (max-height: 400px) and (orientation: landscape) {
+  #howto .howto-grid { margin-top: 4px; }
+  #howto .howto-list { font-size: 10px; line-height: 1.3; column-gap: 24px; }
+  #howto .howto-list li { margin-bottom: 3px; }
+  #howto .pad { font-size: 9.5px; line-height: 1.3; margin: 2px 0 0; }
+  #howto .pad.credit { font-size: 8.5px; }
+}
+@media (max-width: 760px) and (orientation: portrait) and (max-height: 700px) {
+  #howto .howto-list { font-size: 11.5px; line-height: 1.4; gap: 4px; margin: 4px 0; }
+  #howto .pad { font-size: 10.5px; line-height: 1.4; margin: 2px 0; }
+  #howto .pad.credit { font-size: 9px; }
+}

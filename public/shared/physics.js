@@ -68,7 +68,7 @@ function damage(c, amount, parts, kind) {
   for (const [k, w] of Object.entries(parts)) c.dmg[k] = Math.max(0, c.dmg[k] - a * w)
   if (c.dmg.body <= 0 && (!c.wreck || c.knock)) {
     c.knock = false
-    c.wreck = GAME.wreckRespawnSec
+    c.wreck = c.wreckSec || GAME.wreckRespawnSec
     c.events.push({ t: 'wreck', kind })
   }
   return a
@@ -89,7 +89,14 @@ export function step(c, inp, dt, world, others = null) {
     const g = world.groundAt(c.x, c.z, c.y - PHYS.rideHeight)
     if (c.y < g.h + PHYS.rideHeight && !c.falling) { c.y = g.h + PHYS.rideHeight; c.vy = 0 }
     // 体当たりでスピンしただけ（ノックダウン）なら、その場から走り出す（遠くへ戻さない。追われている犯人が逃げられないように）
-    if (c.wreck <= 0) { if (c.knock) { c.knock = false; c.wreck = 0; c.freeze = 0.2 } else respawn(c, { repair: true }) }
+    if (c.wreck <= 0) {
+      if (c.knock) { c.knock = false; c.wreck = 0; c.freeze = 0.2 }
+      else {
+        // 戻る場所をその時点で決める（大破した警察車は犯人から離れた交差点へ）
+        if (c.backPoint) { c.respawnPoint = c.backPoint(); c.safeHist = []; c.backPoint = null }
+        respawn(c, { repair: true })
+      }
+    }
     return
   }
   if (c.freeze > 0) { c.freeze -= dt; regen(c, dt, false); if (Math.hypot(c.vx, c.vz) < 1) { c.vx = c.vy = c.vz = 0 } return }
@@ -181,7 +188,7 @@ export function step(c, inp, dt, world, others = null) {
     // 速いほど切れにくく（高速で切りすぎてスピンしない）。2026-10-26 本人「操作しきれへん」で 28→17
     const sf = clamp(av0 / 5, 0, 1) / (1 + av0 / 17)
     let yawRate = (inp.steer || 0) * steerK * sf * (vf0 < -0.5 ? -1 : 1)
-    if ((inp.handbrake || (!inp.ai && (inp.brake || 0) > 0 && Math.abs(inp.steer || 0) > 0.3)) && av0 > 6) yawRate *= 1.45
+    if ((inp.handbrake || (!inp.ai && (inp.brake || 0) > 0 && Math.abs(inp.steer || 0) > 0.3)) && av0 > 6) yawRate *= PHYS.driftYaw
     // 壊れたサスペンションは高速でふらつく
     yawRate += (1 - d.susp) * Math.sin(c.t * 5.3) * 0.12 * Math.min(1, av0 / 35)
     c.yaw -= yawRate * dt
@@ -191,7 +198,7 @@ export function step(c, inp, dt, world, others = null) {
       let dy = hv - c.yaw
       while (dy > Math.PI) dy -= 2 * Math.PI
       while (dy < -Math.PI) dy += 2 * Math.PI
-      if (Math.abs(dy) < 1.2) c.yaw += dy * Math.min(1, 2.2 * dt)
+      if (Math.abs(dy) < 1.2) c.yaw += dy * Math.min(1, PHYS.straighten * dt)
     }
 
     // 新しい向きで、路面に沿った前と横
@@ -226,10 +233,13 @@ export function step(c, inp, dt, world, others = null) {
 
     // 横滑り。ハンドブレーキと土・草で滑る。消えた横の勢いの大半は前へ回す（曲がっても失速しすぎない）
     const av = Math.abs(vf)
-    const latGrip = grip * gripMul * (inp.handbrake ? 0.16 : brakeDrift ? 0.3 : 1) * (av > 32 && Math.abs(inp.steer || 0) > 0.7 ? 0.8 : 1)
+    // 2026-10-26 本人「ドリフトの時滑りすぎ」: 滑る量 0.16/0.3→0.42/0.55、横滑り角の上限 32 度
+    const latGrip = grip * gripMul * (inp.handbrake ? PHYS.driftGrip : brakeDrift ? PHYS.brakeDriftGrip : 1) * (av > 32 && Math.abs(inp.steer || 0) > 0.7 ? 0.8 : 1)
     const keep = Math.exp(-latGrip * dt)
-    const lost = Math.abs(vl) * (1 - keep)
+    let lost = Math.abs(vl) * (1 - keep)
     vl *= keep
+    const maxLat = av * PHYS.driftMaxTan
+    if (av > 6 && Math.abs(vl) > maxLat) { lost += Math.abs(vl) - maxLat; vl = Math.sign(vl) * maxLat }
     if (av > 1) vf += Math.sign(vf) * lost * (inp.handbrake ? 0.55 : 0.8)
     c.slip = Math.abs(vl)
     c.drifting = Math.abs(vl) > 3.5 && av > 10
@@ -487,7 +497,16 @@ function bump(c, o) {
     // 当たった位置が前後の端なら回される
     c.yaw += Math.sign(hit.a) * (nx * cc - nz * cs) * Math.min(0.5, -rv * 0.03) * share
     const sev = Math.max(0, -rv - 6)
-    if (sev > 0) damage(c, Math.pow(sev, 1.3) * DAMAGE.wallBase * DAMAGE.carHit * (o.traffic ? 0.3 : 1), { body: 1, tires: 0.3 }, 'car')
+    // 犯人に突っ込まれた警察車（ramTaken）は余計に壊れる。先に動いた側が跳ね返るので、
+    // 相手をこの場で動かす場合（オフライン・サーバーのCPU）は突っ込んだ側の計算で相手に入れ、通信で来る相手（remote）のときだけ自分の側で入れる
+    const into = (o.vx || 0) * nx + (o.vz || 0) * nz, mine = -(c.vx * nx + c.vz * nz)
+    const base = Math.pow(sev, 1.3) * DAMAGE.wallBase * DAMAGE.carHit
+    const ram = c.ramTaken && o.remote && o.role && o.role !== c.role && into > mine ? c.ramTaken : 1
+    if (sev > 0) damage(c, base * (o.traffic ? 0.3 : 1) * ram, { body: 1, tires: 0.3 }, 'car')
+    if (sev > 0 && o.ramTaken && !o.remote && !o.wreck && o.role && o.role !== c.role && mine > into) {
+      o.lastHitBy = c.id; o.lastHitAt = o.t
+      damage(o, base * (o.ramTaken - 1), { body: 1, tires: 0.3 }, 'car')
+    }
     // ノックダウン: 自分より速い相手に強く当てられたらスピンして脱落（すぐ近くで復帰）
     const so = Math.hypot(o.vx || 0, o.vz || 0), sc = speedOf(c)
     if (-rv > 12 && so > sc + 5 && !c.wreck) {

@@ -60,6 +60,7 @@ export class Chase {
     // 警察ヘリ
     this.heli = { active: false, x: 0, z: 0, y: CHASE.heliAlt, nextShot: 0, target: null }
     this.strikes = []   // { id, x, z, at, r, from: [x,y,z] } 予告中と、着弾から少しの間
+    this.downs = []     // { id, x, z, at } 大破した警察車（オンラインで他の画面へ伝える用）
     this.blasts = []    // { id, x, z, at, hit: [ids] } 着弾（画面の演出と、オンラインで犯人の画面へ伝える用）
     this.strikeSeq = 0
   }
@@ -89,12 +90,34 @@ export class Chase {
     return { x: n.x, z: n.z, yaw: Math.atan2(s.x - n.x, s.z - n.z), y: 0, node: n.id }
   }
 
+  copDown(e, by) {
+    const d = { id: e.id, x: Math.round(e.car.x), z: Math.round(e.car.z), at: Math.round(this.t * 100) / 100, by: by ? by.id : null }
+    this.downs.push(d)
+    this.events.push({ t: 'copDown', ...d })
+  }
+
+  // オンライン: 人の警察車が大破したと届いた（サーバーは人の車を動かさないので、ここで数える）。犯人がそばにいれば犯人のせい
+  remoteCopDown(e) {
+    const r = this.robbers.find(r => !r.left && Math.hypot(r.car.x - e.car.x, r.car.z - e.car.z) < 15)
+    if (r) { r.takedowns++; this.heatBonus = Math.min(4, this.heatBonus + 1) }
+    this.copDown(e, r)
+  }
+
+  copBackPoint(c) {
+    const r = this.robbers[0] ? this.robbers[0].car : c
+    const cand = this.nav.list.filter(n => { const d = Math.hypot(n.x - r.x, n.z - r.z); return d >= CHASE.copBackMin && d <= CHASE.copBackMax })
+    const n = cand.length ? cand[Math.floor(this.rng() * cand.length)] : this.nav.nearest(c.x, c.z)
+    return { x: n.x, z: n.z, yaw: Math.atan2(r.x - n.x, r.z - n.z), y: 0 }
+  }
+
   // humans: [{ id, name, carId, levels, paint, remote, role }]。remote=true の車はここで動かさない（通信で位置が来る）
   addHuman(p) {
     const role = p.role === 'cop' ? 'cop' : 'robber'
     const spawn = this.spawnFor(role)
     const car = createCar({ id: p.id, name: p.name, carId: p.carId, levels: p.levels, paint: role === 'cop' ? COP_PAINT : (p.paint ?? ROBBER_PAINT), spawn })
     car.role = role
+    car.remote = !!p.remote
+    if (role === 'cop') copCar(car)
     const e = { id: p.id, car, bot: false, remote: !!p.remote, role, spawn, spawnNode: spawn.node, left: false, bust: 0, arrested: false, escaped: false, takedowns: 0, px: car.x, pz: car.z, cp: 0, finished: false }
     this.entries.push(e)
     return car
@@ -111,6 +134,7 @@ export class Chase {
       const levels = role === 'cop' ? { engine: 2 + (k % 2), armor: 1 } : { engine: 1 }
       const car = createCar({ id, name, carId, levels, paint: role === 'cop' ? COP_PAINT : ROBBER_PAINT, spawn, bot: true })
       car.role = role
+      if (role === 'cop') copCar(car)
       const plan = { pts: densify([[spawn.x, spawn.z], [spawn.x + Math.sin(spawn.yaw) * 30, spawn.z + Math.cos(spawn.yaw) * 30]], 6), picks: [], boostZones: [] }
       const driver = createDriver(this.world, car, plan, role === 'cop' ? 0.9 + this.rng() * 0.1 : 0.8 + this.rng() * 0.12)
       driver.safe = plan
@@ -320,8 +344,8 @@ export class Chase {
         if (e.role === 'cop') {
           const rob = this.nearestRobber(c)
           const far = rob ? Math.hypot(rob.car.x - c.x, rob.car.z - c.z) : 0
-          c.rb = 0.99 + 0.03 * this.heat + Math.max(0, Math.min(0.2, (far - 60) / 400))
-        } else c.rb = 0.95 // 犯人の CPU は少しだけ遅い（警察役の人が追いつけるように）
+          c.rb = 0.99 + 0.03 * this.heat + Math.max(0, Math.min(CHASE.copCatch, (far - 60) / 400))
+        } else c.rb = CHASE.robberRb // 犯人の CPU は少しだけ遅い（警察役の人が追いつけるように）
         inp = drive(dr, this.world, cars)
       } else inp = inputs[e.id] || {}
       // 犯人に3秒の先行（警察はスタートで少し待つ）
@@ -448,6 +472,11 @@ export class Chase {
         this.events.push({ t: 'takedown', id: by.id, victim: e.id, kind: ev.kind })
         if (by.role === 'robber' && ev.kind !== 'knock') this.heatBonus = Math.min(4, this.heatBonus + 1)
       }
+      // 警察車の大破: その場で燃えて残り、少し遅れて犯人から離れた交差点へ戻る
+      if (e.role === 'cop' && ev.kind !== 'knock') {
+        c.backPoint = () => this.copBackPoint(c)
+        this.copDown(e, by)
+      }
       if (e.role === 'robber' && !this.remoteJudge && ev.kind !== 'knock' && this.nearestCopDist(c) < CHASE.wreckBustDist) this.arrest(e, 'wreck', by && by.role === 'cop' ? by.id : this.nearestCopId(c))
     }
     // ニトロ缶（取ってから 10 秒で同じ車がまた取れる）
@@ -573,6 +602,7 @@ export class Chase {
       pingUntil: this.pingUntil,
       heli: { active: this.heli.active, x: Math.round(this.heli.x), z: Math.round(this.heli.z) },
       strikes: this.strikes.filter(s => !s.done).map(s => ({ id: s.id, x: Math.round(s.x * 10) / 10, z: Math.round(s.z * 10) / 10, at: Math.round(s.at * 100) / 100, r: s.r, target: s.target })),
+      downs: (this.downs = this.downs.filter(d => this.t - d.at < 3)).map(d => ({ ...d })),
       blasts: this.blasts.map(b => ({ id: b.id, x: b.x, z: b.z, at: b.at, hit: b.hit })),
       reps: Object.fromEntries(this.entries.map(e => [e.id, [Math.round((e.rep || 0) * 100) / 100, Math.ceil(e.repairCd || 0), e.repairs || 0, e.repSeen ? 1 : 0]]))
     }
@@ -595,6 +625,13 @@ export function blast(c, s, rng = Math.random) {
   c.dmg.engine = Math.max(0.15, c.dmg.engine - a * 0.5)
   c.dmg.tires = Math.max(0.15, c.dmg.tires - a * 0.4)
   c.events.push({ t: 'blasted', x: s.x, z: s.z })
+}
+
+// 警察車: 犯人に突っ込まれると壊れやすく、大破すると長く止まる
+function copCar(car) {
+  car.stats.durability *= CHASE.copDurability
+  car.ramTaken = CHASE.copRamTaken
+  car.wreckSec = CHASE.copWreckSec
 }
 
 export { respawn, speedOf }
