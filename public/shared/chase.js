@@ -505,6 +505,7 @@ export class Chase {
   arrest(e, reason, by) {
     if (e.arrested || e.escaped) return
     e.arrested = true; e.bust = 1
+    e.endBody = e.car.dmg.body // 結果には捕まった瞬間の車体を出す（このあと復帰で直るため）
     e.car.freeze = 999
     const cop = by ? this.entry(by) : null
     if (cop) cop.arrests = (cop.arrests || 0) + 1
@@ -558,6 +559,7 @@ export class Chase {
   finish(winner, reason, by = null, who = null) {
     this.phase = 'done'
     this.outcome = { winner, reason, by, who, t: Math.max(0, this.t) }
+    for (const e of this.entries) if (e.endBody == null) e.endBody = e.car.dmg.body
     this.events.push({ t: 'over', winner, reason })
   }
 
@@ -588,7 +590,7 @@ export class Chase {
       credits += Math.min(REWARD.breakCap, c.breaks * REWARD.perBreak) + (e.takedowns || 0) * REWARD.takedown
       return {
         id: e.id, name: c.name, bot: e.bot, role: e.role, place: i + 1, won, arrested: e.arrested, escaped: e.escaped, arrests: e.arrests || 0,
-        left: e.left, breaks: c.breaks, maxAir: Math.round(c.maxAir * 10) / 10, body: Math.round(c.dmg.body * 100), credits, carId: c.carId, takedowns: e.takedowns || 0,
+        left: e.left, breaks: c.breaks, maxAir: Math.round(c.maxAir * 10) / 10, body: Math.round((e.endBody ?? c.dmg.body) * 100), credits, carId: c.carId, takedowns: e.takedowns || 0,
         finished: won, time: this.outcome ? this.outcome.t : this.t, dnf: false, cp: 0
       }
     })

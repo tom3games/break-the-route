@@ -1,12 +1,12 @@
 // オンラインの警察と犯人を実ブラウザ2つ（＋任意で webkit）でつないで最後まで通す。
-// 1回目は制限時間を40秒に縮めて自然に決着させ、2回目（再戦）は犯人を止めて警察に逮捕させる（両方の結末を見る）。
+// 1回目は制限時間を70秒に縮めて自然に決着させ、2回目（再戦）は犯人を止めて警察に逮捕させる（両方の結末を見る）。
 // node tools/e2e-online.mjs [--webkit]   （サーバーは自分で起動する）
 import { chromium, webkit } from 'playwright'
 import { startServer } from '../server.mjs'
 import { mkdir } from 'node:fs/promises'
 const OUT = new URL('../shots/', import.meta.url).pathname
 await mkdir(OUT, { recursive: true })
-process.env.BTR_CHASE_LIMIT = '40'
+process.env.BTR_CHASE_LIMIT = '70' // 2回目の逮捕は警察役が220〜420m先から来て、途中で読み込み直しもするので余裕を持たせる（40秒では webkit で3回に1回届かなかった）
 const srv = await startServer({ port: 8191, quiet: true })
 const URL0 = `http://localhost:${srv.port}/`
 const problems = [], notes = []
@@ -82,8 +82,8 @@ await A.waitForTimeout(1500)
 const [dA, dB] = await Promise.all([A, B].map(p => p.evaluate(() => [...window.__btr.world.destroyed])))
 const missing = dA.filter(id => !dB.includes(id))
 ok(dA.length >= 1 && missing.length <= 1, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
-// 最後まで（制限時間40秒）
-await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 90000 }).catch(() => {})))
+// 最後まで（制限時間70秒）
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 120000 }).catch(() => {})))
 await A.waitForTimeout(2500)
 await A.screenshot({ path: OUT + 'online-A-results.png' })
 await B.screenshot({ path: OUT + 'online-B-results.png' })
@@ -114,10 +114,14 @@ await copPage.reload(); await copPage.waitForFunction(() => window.__btr && wind
 const after = await copPage.evaluate(() => window.__btr.me ? ({ id: window.__btr.myId, x: window.__btr.me.x, z: window.__btr.me.z }) : null)
 ok(after && after.id === before.id && Math.hypot(after.x - before.x, after.z - before.z) < 80, '読み込み直しても同じ席で続きから走れる', JSON.stringify({ before, after }))
 await copPage.evaluate(() => window.__btr.autopilot())
-await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 90000 }).catch(() => {})))
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 120000 }).catch(() => {})))
 await A.waitForTimeout(2000)
 const out2 = await copPage.textContent('#rTitle') + ' ' + await copPage.textContent('#rReason')
 ok(/警察の勝ち/.test(out2), '2回目は止まった犯人を逮捕して警察の勝ち', out2)
+// 結果の車体は決着した瞬間の値（大破で逮捕なら低い。体当たりでスピンしただけでは大破扱いにしない）
+const robRow = await copPage.$$eval('#rBody tr', trs => (trs.find(t => t.querySelector('.role-robber')) || {}).textContent || '')
+const robBody = Number((robRow.match(/(\d+)%/) || [])[1])
+ok(!/大破/.test(out2) || robBody < 10, '大破で逮捕なら結果の犯人の車体は低い', `${out2} / ${robRow}`)
 await copPage.screenshot({ path: OUT + 'online-cop-bust.png' })
 await A.click('#btnAgain').catch(() => {})
 await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'race', null, { timeout: 10000 }).catch(() => {})))

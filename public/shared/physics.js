@@ -528,7 +528,7 @@ export function packCar(c) {
   return {
     id: c.id, x: r(c.x), y: r(c.y), z: r(c.z), vx: r(c.vx), vy: r(c.vy), vz: r(c.vz),
     yaw: r(c.yaw, 1000), pitch: r(c.pitch, 1000), roll: r(c.roll, 1000),
-    b: c.boosting ? 1 : 0, g: c.grounded ? 1 : 0, w: c.wreck > 0 ? 1 : 0,
+    b: c.boosting ? 1 : 0, g: c.grounded ? 1 : 0, w: c.wreck > 0 ? 1 : 0, k: c.knock ? 1 : 0,
     d: [c.dmg.body, c.dmg.engine, c.dmg.tires, c.dmg.susp, c.dmg.cool].map(v => r(v)),
     boost: r(c.boost), heat: r(c.heat)
   }

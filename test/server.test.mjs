@@ -169,6 +169,45 @@ test('警察が犯人のそばで止まると、サーバーが逮捕して警�
   } finally { await srv.close() }
 })
 
+test('オンライン: 体当たりでスピンしただけ（ノックダウン）は大破扱いにせず、本当の大破で逮捕。結果の車体は大破した瞬間の値', async () => {
+  const srv = await startServer({ port: 0, quiet: true })
+  try {
+    const { cs } = await room(srv, 2, 0)
+    await untilRacing(cs[0])
+    const rob = cs.find(c => roleOf(c) === 'robber'), cop = cs.find(c => roleOf(c) === 'cop')
+    const rs = spawnOf(rob), cp = spawnOf(cop)
+    rob.send(stateMsg(rs.x, rs.z))
+    // 警察は道なりに犯人の 30m 手前まで（逮捕ゲージは 10m 以内なのでたまらない）
+    const path = NAV.path(NAV.nearest(cp.x, cp.z), NAV.nearest(rs.x, rs.z)).map(n => [n.x, n.z])
+    let x = cp.x, z = cp.z
+    const goal = path.length > 1 ? path[path.length - 2] : [rs.x + 30, rs.z]
+    for (const [tx, tz] of [...path.slice(0, -1), goal]) {
+      while (Math.hypot(tx - x, tz - z) > 0.01) {
+        const d = Math.hypot(tx - x, tz - z), k = Math.min(1, 18 / d)
+        x += (tx - x) * k; z += (tz - z) * k
+        cop.send(stateMsg(x, z)); rob.send(stateMsg(rs.x, rs.z))
+        await sleep(240)
+      }
+    }
+    // 30m まで寄せる
+    const dd = Math.hypot(rs.x - x, rs.z - z)
+    if (dd > 30) for (let i = 1; i <= 8; i++) { const k = (dd - 30) / dd * i / 8; cop.send(stateMsg(x + (rs.x - x) * k, z + (rs.z - z) * k)); rob.send(stateMsg(rs.x, rs.z)); await sleep(240) }
+    const full = [1, 1, 1, 1, 1]
+    // ノックダウン（w=1, k=1）: 逮捕されない
+    for (let i = 0; i < 4; i++) { rob.send(stateMsg(rs.x, rs.z, { w: 1, k: 1, d: full })); await sleep(200) }
+    rob.send(stateMsg(rs.x, rs.z, { d: full })); await sleep(400)
+    assert.ok(!cop.msgs.some(m => m.t === 'state' && m.phase === 'result'), 'ノックダウンで逮捕された')
+    // 本当の大破（車体 0）
+    rob.send(stateMsg(rs.x, rs.z, { w: 1, d: [0, 0.5, 0.5, 0.5, 0.5] }))
+    await sleep(300)
+    rob.send(stateMsg(rs.x, rs.z, { d: [1, 1, 1, 1, 1] })) // 復帰で直った値が届いても
+    await cop.wait(c => c.msgs.some(m => m.t === 'state' && m.phase === 'result'), 8000)
+    const res = cop.msgs.filter(m => m.t === 'state' && m.phase === 'result').at(-1).result
+    assert.equal(res.outcome.reason, 'wreck')
+    assert.equal(res.list.find(r => r.id === rob.id).body, 0)
+  } finally { await srv.close() }
+})
+
 test('不正な形のメッセージでサーバーが落ちない', async () => {
   const srv = await startServer({ port: 0, quiet: true })
   try {

@@ -270,3 +270,15 @@ test('警察車: 犯人の全力の体当たり2〜3回で大破し、その場�
   // 警察が犯人に当てても自分は壊れにくい（6回で大破しない）
   assert.ok(ce)
 })
+
+test('結果の車体は決着した瞬間の値（大破で逮捕されたあと復帰で直っても 0% のまま）', () => {
+  const { ch, rob, copCars } = chase()
+  run(ch, GAME.countdownSec + 0.1)
+  copCars[0].x = rob.x + 20; copCars[0].z = rob.z
+  rob.dmg.body = 0
+  ch.arrest(ch.entry('r'), 'wreck', 'c0')
+  rob.dmg.body = 1 // 復帰で直った
+  run(ch, 1, {})
+  const r = ch.results().find(x => x.id === 'r')
+  assert.equal(r.body, 0)
+})

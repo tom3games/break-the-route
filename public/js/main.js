@@ -1337,7 +1337,7 @@ function syncOnline() {
     const c = e.car
     c.x = s.x; c.y = s.y; c.z = s.z; c.vx = s.vx; c.vy = s.vy; c.vz = s.vz
     c.yaw = s.yaw; c.pitch = s.pitch; c.roll = s.roll
-    c.boosting = !!s.b; c.grounded = !!s.g; c.wreck = s.w ? 1 : 0
+    c.boosting = !!s.b; c.grounded = !!s.g; c.wreck = s.w ? 1 : 0; c.knock = !!s.k
     if (s.d) ['body', 'engine', 'tires', 'susp', 'cool'].forEach((k, i) => { c.dmg[k] = s.d[i] })
   }
 }
