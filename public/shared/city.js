@@ -37,7 +37,7 @@ for (const [x, z, k] of [[-80, 440, 'park'], [80, 120, 'park'], [0, 520, 'plaza'
 
 export function buildCity() {
   const roads = [], slabs = [], boxes = [], props = [], dirt = [], repair = [], decor = [], labels = [], grassRects = [], dirtRects = [], trees = [], shortcuts = [], lotRects = [], pickups = []
-  const tree = (x, z, s = 0.62) => { trees.push({ x, y: 0, z, s, r: x * 0.37 + z }); boxes.push({ cx: x, cz: z, yaw: 0, hw: 0.45, hl: 0.45, y0: -1, h: 14, kind: 'tree' }) }
+  const tree = (x, z, s = 0.62) => { trees.push({ x, y: 0, z, s, r: x * 0.37 + z }); props.push({ type: 'tree', x, z, yaw: 0, y: -0.5, ti: trees.length - 1 }) }
   const road = (pts, w = 12, surf = 'road') => roads.push({ pts, w, surf })
   const box = (x0, z0, x1, z1, h, kind = 'building', y0 = 0) =>
     boxes.push({ cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, yaw: 0, hw: Math.abs(x1 - x0) / 2, hl: Math.abs(z1 - z0) / 2, y0, h, kind })

@@ -93,7 +93,30 @@ export function buildForest(scene, spots) {
   for (const im of [trunks, crowns]) { im.castShadow = true; im.receiveShadow = true; im.instanceMatrix.needsUpdate = true; scene.add(im) }
   crowns.instanceColor.needsUpdate = true
   crowns.frustumCulled = trunks.frustumCulled = false
-  return { trunks, crowns }
+  // 折れた木を消す・戻す（i は spots の順番）
+  const saveT = trunks.instanceMatrix.array.slice(), saveC = crowns.instanceMatrix.array.slice()
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0)
+  return {
+    trunks, crowns,
+    hide(i) { trunks.setMatrixAt(i, zero); crowns.setMatrixAt(i, zero); trunks.instanceMatrix.needsUpdate = crowns.instanceMatrix.needsUpdate = true },
+    show(i) { for (const [im, sv] of [[trunks, saveT], [crowns, saveC]]) { im.instanceMatrix.array.set(sv.subarray(i * 16, i * 16 + 16), i * 16); im.instanceMatrix.needsUpdate = true } },
+    reset() { trunks.instanceMatrix.array.set(saveT); crowns.instanceMatrix.array.set(saveC); trunks.instanceMatrix.needsUpdate = crowns.instanceMatrix.needsUpdate = true },
+    // 1本だけの見た目（倒れる演出用）。原点は根元
+    single(i) {
+      const g = new THREE.Group(), m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3()
+      trunks.getMatrixAt(i, m); m.decompose(p, q, s)
+      const base = p.clone()
+      for (const im of [trunks, crowns]) {
+        im.getMatrixAt(i, m)
+        const mesh = new THREE.Mesh(im.geometry, im.material)
+        m.decompose(mesh.position, mesh.quaternion, mesh.scale)
+        mesh.position.sub(base); mesh.castShadow = true
+        g.add(mesh)
+      }
+      g.position.copy(base)
+      return g
+    }
+  }
 }
 
 // 道ばたの草むら（板2枚の十字）。近くだけに置く

@@ -221,8 +221,9 @@ function placeProps() {
   }
   for (const o of rails) railIM.setMatrixAt(railIndex.get(o.id), railMatrix(o, true))
   railIM.instanceMatrix.needsUpdate = true
+  if (built.forest) built.forest.reset()
   for (const o of world.objects) {
-    if (o.type === 'guardrail') continue
+    if (o.type === 'guardrail' || o.type === 'tree') continue
     const g = geoCache[o.type] || (geoCache[o.type] = propGeometry(o.type))
     const m = new THREE.Mesh(g, propMat)
     m.position.set(o.cx, o.y0, o.cz)
@@ -613,6 +614,22 @@ function renderPreview() {
 function breakVisual(id, info) {
   const o = world.objectById.get(id)
   let m = props.get(id)
+  if (o && o.type === 'tree') {
+    // 木: まとめて描いている中から1本消して、同じ形の木を根元から倒す。葉と枝が散る
+    built.forest.hide(o.ti)
+    const tm = built.forest.single(o.ti)
+    scene.add(tm)
+    const dx0 = info ? info.dx || 0 : 0, dz0 = info ? info.dz || 1 : 1, sp0 = Math.hypot(dx0, dz0) || 1
+    const ux = dx0 / sp0, uz = dz0 / sp0
+    const axis = new THREE.Vector3(uz, 0, -ux).normalize()
+    const pivot = tm.position.clone()
+    fx.launch(tm, { pivotFall: { axis, pivot, offset: new THREE.Vector3(), base: new THREE.Quaternion(), angle: 0, target: 1.45, dur: 1.1, onDone: () => fx.dust(pivot.x + ux * 9, pivot.y, pivot.z + uz * 9, 6, [0.45, 0.55, 0.3], 1.2) } })
+    fx.debrisAt(o.cx, o.y0 + 3, o.cz, 10, 0x4d8c43, { speed: 6, up: 5, size: 0.35, dir: { x: dx0 * 0.4, z: dz0 * 0.4 }, spread: 2 })
+    fx.debrisAt(o.cx, o.y0 + 1, o.cz, 4, 0x6b4a2f, { speed: 5, up: 4, size: 0.3, dir: { x: dx0 * 0.4, z: dz0 * 0.4 }, plank: true })
+    const near = me ? Math.hypot(me.x - o.cx, me.z - o.cz) : 999
+    if (near < 120) { audio.wood(1.2 * (1 - near / 120)); fx.addShake(0.25 * (1 - near / 120)) }
+    return
+  }
   if (o && o.type === 'guardrail') {
     // 束から1本消して、同じ形の実体を作って飛ばす
     setRail(id, false)
@@ -1041,6 +1058,7 @@ function ensureOnline() {
       world.destroyed.delete(id); world.destroyedAt.delete(id); seenBroken.delete(id)
       const o = world.objectById.get(id)
       if (o.type === 'guardrail') { setRail(id, true); return }
+      if (o.type === 'tree') { built.forest.show(o.ti); return }
       const old = props.get(id); if (old) old.parent && old.parent.remove(old)
       const m = new THREE.Mesh(geoCache[o.type] || (geoCache[o.type] = propGeometry(o.type)), propMat)
       m.position.set(o.cx, o.y0, o.cz); m.rotation.y = o.yaw; m.castShadow = true

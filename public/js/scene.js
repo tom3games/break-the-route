@@ -177,6 +177,7 @@ export function buildScene(scene, world) {
 
   // ---------------------------------------- 板（橋・高架・ジャンプ台）
   const plankMeshes = []
+  let forest = null
   {
     const sides = new Builder(), tops = new Builder(), soilTop = new Builder(), wood = new Builder(), lines = new Builder()
     for (const sl of world.slabs) {
@@ -342,7 +343,7 @@ export function buildScene(scene, world) {
       const h = terrain(px, pz)
       spots.push({ x: px, y: h, z: pz, s: 0.75 + rnd() * 0.65, r: rnd() * 6.28 })
     }
-    buildForest(root, spots)
+    forest = buildForest(root, spots)
     // 道の脇 3〜25m に草むら
     const tufts = []
     for (const sg of world.segs) {
@@ -467,7 +468,7 @@ export function buildScene(scene, world) {
     }
   }
 
-  return { root, gates, plankMeshes }
+  return { root, gates, plankMeshes, forest }
 }
 
 function checkerTexture() {

@@ -86,6 +86,7 @@ export const DESTRUCT = {
   lumber:    { breakAt: 19, absorb: 0.25, hard: 1.1, debris: 12, color: 0xc4904f, w: 3.2, l: 2.2, h: 1.6 },
   guardrail: { breakAt: 13, absorb: 0.12, hard: 0.9, debris: 4,  color: 0xc9ced6, w: 4.2, l: 0.4, h: 0.9 },
   wall:      { breakAt: 31, absorb: 0.42, hard: 1.6, debris: 22, color: 0xa65a3f, w: 16,  l: 1.2, h: 6.0 },
+  tree:      { breakAt: 8,  absorb: 0.14, hard: 0.8, debris: 8,  color: 0x3f7a3a, w: 0.9, l: 0.9, h: 14 },
   parked:    { breakAt: 15, absorb: 0.22, hard: 0.9, debris: 6,  color: 0x6d7480, w: 1.9, l: 4.3, h: 1.4 },
   signal:    { breakAt: 9,  absorb: 0.08, hard: 0.7, debris: 4,  color: 0x2b2e33, w: 0.5, l: 0.5, h: 5.2 },
   tower:     { breakAt: 14, absorb: 0.18, hard: 0.9, debris: 8,  color: 0xe0a020, w: 1.6, l: 1.6, h: 48 }

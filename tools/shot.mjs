@@ -114,6 +114,17 @@ if (script === 'city') {
     await page.screenshot({ path: OUT + 'city-' + n + '.png' })
   }
 }
+if (script === 'tree') {
+  await page.evaluate(() => { window.__btr.profile.stage = 'touge' })
+  await page.click('#btnOffline'); await page.waitForTimeout(5000)
+  // 一番近い木に向かって走らせる
+  await page.evaluate(() => { const b = window.__btr; const t = b.world.trees.find(t => t.z > 900 && t.z < 1000 && Math.abs(t.x - 140) < 40) || b.world.trees[500]; const yaw = 0; b.teleport(t.x, t.z - 14, yaw, 22) })
+  await page.waitForTimeout(700)
+  await page.screenshot({ path: OUT + 'tree1.png' })
+  await page.waitForTimeout(900)
+  await page.screenshot({ path: OUT + 'tree2.png' })
+  console.log('broken trees', await page.evaluate(() => [...window.__btr.world.destroyed].filter(id => id.startsWith('tree')).length))
+}
 const info = await page.evaluate(() => ({ calls: window.__btr.renderer.info.render.calls, tris: window.__btr.renderer.info.render.triangles, mode: window.__btr.mode, broken: [...window.__btr.world.destroyed].length }))
 console.log(JSON.stringify(info))
 console.log(errs.slice(0, 30).join('\n') || 'no errors')

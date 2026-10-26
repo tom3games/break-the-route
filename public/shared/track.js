@@ -350,7 +350,8 @@ function build() {
       if (onSlab(px, pz)) continue
       trees.push({ x: px, y: h, z: pz, s, r })
     }
-    for (const t of trees) boxes.push({ cx: t.x, cz: t.z, yaw: 0, hw: 0.45, hl: 0.45, y0: t.y - 1, h: 22, kind: 'tree' })
+    // 木は折れる（壊せる物）。見た目は scene.js がまとめて描き、折れた1本だけ差し替える
+    trees.forEach((t, ti) => props.push({ type: 'tree', x: t.x, z: t.z, yaw: 0, y: t.y - 0.5, ti }))
   }
 
   // CPU の走行線。区間ごとにルートを選ぶ。need: 'boost' はブーストを溜めてから入る / risk は挑む確率の目安
@@ -493,6 +494,7 @@ export function createWorld(stage = 'touge') {
     const id = `${p.type}${i}`
     const y = p.y ?? w.terrain(p.x, p.z)
     const o = { id, type: p.type, cx: p.x, cz: p.z, yaw: p.yaw || 0, hw: d.w / 2, hl: d.l / 2, y0: y, y1: y + d.h, def: d }
+    if (p.ti != null) { o.ti = p.ti; T.trees[p.ti].id = id }
     w.objects.push(o)
     w.colGrid.add(o, ...obbAabb(o, 1))
   })
