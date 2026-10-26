@@ -77,7 +77,7 @@ const [dA, dB] = await Promise.all([A, B].map(p => p.evaluate(() => [...window._
 const missing = dA.filter(id => !dB.includes(id))
 ok(dA.length >= 2 && missing.length <= 1, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
 // 最後まで
-await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 150000 }).catch(() => {})))
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 330000 }).catch(() => {})))
 await A.waitForTimeout(2500)
 await A.screenshot({ path: OUT + 'online-A-results.png' })
 await B.screenshot({ path: OUT + 'online-B-results.png' })

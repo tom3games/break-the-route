@@ -202,6 +202,12 @@ export class HUD {
     // 壊せる物（残っているもの）
     g.fillStyle = '#ff9a3c'
     for (const o of W.objects) if (!W.destroyed.has(o.id) && o.def.breakAt >= 14) rectRot(g, o, 1.5)
+    // 近道（オレンジの点線）とニトロ缶
+    g.save(); g.strokeStyle = '#ff8a1f'; g.lineWidth = 3 / sc; g.setLineDash([6 / sc, 5 / sc])
+    for (const s2 of W.shortcuts || []) { g.beginPath(); g.moveTo(-s2.entry[0], -s2.entry[1]); g.lineTo(-s2.inA[0], -s2.inA[1]); g.lineTo(-s2.outB[0], -s2.outB[1]); g.lineTo(-s2.exit[0], -s2.exit[1]); g.stroke() }
+    g.restore()
+    g.fillStyle = '#3ab6ff'
+    for (const pk of W.pickups || []) { g.beginPath(); g.arc(-pk.x, -pk.z, 2.4 / sc, 0, Math.PI * 2); g.fill() }
     // 修理ピット
     g.fillStyle = 'rgba(59,140,255,0.8)'
     for (const r of W.repair) g.fillRect(-r.x1, -r.z1, r.x1 - r.x0, r.z1 - r.z0)

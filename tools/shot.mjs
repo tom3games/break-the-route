@@ -55,9 +55,10 @@ if (script === 'full') {
   await page.screenshot({ path: OUT + 'results.png' })
 }
 if (script === 'tour') {
+  await page.evaluate(() => { window.__btr.profile.stage = 'touge' })
   await page.click('#btnOffline')
   await page.waitForTimeout(5000)
-  const spots = [['alley', 34, 150, 0], ['closed', 0, 150, 0], ['c-ramp', 52, 320, 0], ['c-deck', 56, 425, 0], ['warehouse', 0, 425, 0], ['pit1', -62, 450, 0], ['bridge', 0, 640, 0], ['bridge2', -40, 610, 0.6], ['detour', -200, 640, -Math.PI / 2], ['trail', 168, 690, 0], ['hill-a', 140, 930, 0], ['mine', 0, 900, 0], ['cliff', 0, 1020, 0], ['mtn-d', -90, 930, 0.5], ['finish', 0, 1140, 0]]
+  const spots = [['alley', 34, 150, 0], ['closed', 0, 150, 0], ['c-ramp', 52, 320, 0], ['c-deck', 56, 425, 0], ['warehouse', 0, 425, 0], ['pit1', -62, 450, 0], ['bridge', 0, 640, 0], ['bridge2', -40, 610, 0.6], ['bridge3', 30, 700, -0.6], ['bridge4', 0, 760, Math.PI], ['detour', -200, 640, -Math.PI / 2], ['trail', 168, 690, 0], ['hill-a', 140, 930, 0], ['mine', 0, 900, 0], ['cliff', 0, 1020, 0], ['mtn-d', -90, 930, 0.5], ['finish', 0, 1140, 0]]
   for (const [n, x, z, yaw] of spots) {
     await page.evaluate(([x, z, yaw]) => { window.__btr.setPaused(false); window.__btr.teleport(x, z, yaw, 0) }, [x, z, yaw])
     await page.waitForTimeout(700)
@@ -102,7 +103,9 @@ if (script === 'city') {
   await page.waitForTimeout(1200)
   await page.screenshot({ path: OUT + 'city-start.png' })
   await page.waitForTimeout(4000)
-  const spots = [['avenue', 0, 250, 0, 30], ['downtown', 0, 450, 0, 25], ['bridge', 160, 420, Math.PI, 38], ['park', -40, 430, 0.3, 0], ['plaza', 40, 530, 0.5, 0], ['parking', -170, 240, Math.PI / 2, 0], ['site', 150, 470, 1.2, 0], ['traffic', -120, 120, Math.PI / 2, 20], ['canal', -60, 300, 0.4, 0]]
+  const sc = await page.evaluate(() => window.__btr.world.shortcuts.map(s => [s.entry, s.out]))
+  const spots = [['avenue', 0, 300, 0, 30], ['downtown', 0, 800, 0, 25], ['bridge', 260, 690, Math.PI, 40]]
+  sc.forEach(([e, o], i) => spots.push(['cut' + i, e[0] + o[0] * 40, e[1] + o[1] * 40, Math.atan2(-o[0], -o[1]), 0]))
   for (const [n, x, z, yaw, sp] of spots) {
     await page.evaluate(([x, z, yaw, sp]) => { window.__btr.setPaused(false); window.__btr.teleport(x, z, yaw, sp) }, [x, z, yaw, sp])
     await page.waitForTimeout(sp ? 900 : 600)

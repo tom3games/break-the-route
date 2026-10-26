@@ -1,54 +1,51 @@
-// 一般車。通りの長方形を左側通行で回る。位置はレース時刻だけで決まる（どの画面でも同じ所にいる）。
-// レースの車に強く当てられると吹き飛び、数秒後に元の周回に戻る（吹き飛び方は各画面だけの演出）。
+// 一般車。街の通りを両方向に走る（左側通行。対向車線にも車がいる）。
+// 位置はレース時刻だけで決まる（どの画面でも同じ所にいる）。通りの端まで行くと反対の端から出てくる（端は外周のビルの中）。
+// レースの車に強く当てられると吹き飛び、数秒後に元の流れへ戻る（吹き飛び方は各画面だけの演出）。
 import { PHYS } from './config.js'
 
-const LANE = 4.4 // 道の中心から左へ（18m の通りの片側車線の真ん中）
-
 export function createTraffic(world) {
-  const loops = world.trafficLoops || []
   const cars = []
-  loops.forEach(([x0, z0, x1, z1], li) => {
-    // 交互に回る向きを変える
-    const cw = li % 2 === 0
-    const pts = cw ? [[x0, z0], [x0, z1], [x1, z1], [x1, z0]] : [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
-    const segs = []
-    let len = 0
-    for (let i = 0; i < 4; i++) {
-      const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % 4]
-      const L = Math.hypot(bx - ax, bz - az)
-      segs.push({ ax, az, dx: (bx - ax) / L, dz: (bz - az) / L, L, s0: len })
-      len += L
-    }
-    const n = Math.max(2, Math.round(len / 110))
+  const lines = []
+  // 幅 18m 以上の真っすぐな通り（路地は走らない）
+  for (const r of world.roads) {
+    if (r.w < 18 || r.pts.length !== 2) continue
+    const [[ax, az], [bx, bz]] = r.pts
+    const L = Math.hypot(bx - ax, bz - az)
+    if (L < 60) continue
+    const dx = (bx - ax) / L, dz = (bz - az) / L
+    // 片側の車線の中心。大通り（28m）は片側2車線
+    const lanes = r.w >= 28 ? [3.6, 10] : [4.4]
+    for (const dir of [1, -1]) for (const lane of lanes) lines.push({ ax, az, dx, dz, L, dir, lane })
+  }
+  lines.forEach((ln, li) => {
+    const n = Math.max(1, Math.round(ln.L / 230))
     for (let k = 0; k < n; k++) {
-      const id = `t${li}_${k}`
-      cars.push({ id, traffic: true, loop: { segs, len }, phase: len * k / n, speed: 9 + ((li * 7 + k * 3) % 5), x: 0, y: PHYS.rideHeight, z: 0, vx: 0, vy: 0, vz: 0,
-        yaw: 0, pitch: 0, roll: 0, grounded: true, wreck: 0, stats: { mass: 1.3 }, knocked: 0,
-        kind: ['sedan', 'van', 'taxi', 'sedan', 'sedan', 'van'][(li * 3 + k) % 6],
-        color: [0xe9e9e9, 0x2b2e33, 0xb8bcc2, 0x2f5f9a, 0xd8d2c0, 0x8b0f14][(li + k) % 6] })
-      if (cars[cars.length - 1].kind === 'taxi') cars[cars.length - 1].color = 0xf2c230
+      const kind = ['sedan', 'van', 'taxi', 'sedan', 'sedan', 'van', 'sedan'][(li * 3 + k) % 7]
+      cars.push({
+        id: `t${li}_${k}`, traffic: true, line: ln, phase: ln.L * (k + (li % 3) * 0.33) / n, speed: 10 + ((li * 7 + k * 3) % 6),
+        x: 0, y: PHYS.rideHeight, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0, roll: 0, grounded: true, wreck: 0, stats: { mass: 1.3 }, knocked: 0,
+        kind, color: kind === 'taxi' ? 0xf2c230 : [0xe9e9e9, 0x2b2e33, 0xb8bcc2, 0x2f5f9a, 0xd8d2c0, 0x8b0f14][(li + k) % 6]
+      })
     }
   })
 
   function place(c, t) {
-    const { segs, len } = c.loop
-    let s = (c.phase + t * c.speed) % len
-    let sg = segs[0]
-    for (const g of segs) if (s >= g.s0 && s < g.s0 + g.L) { sg = g; break }
-    s -= sg.s0
-    // 左 = 進む向きを左へ 90 度
-    const lx = sg.dz, lz = -sg.dx
-    c.x = sg.ax + sg.dx * s + lx * LANE
-    c.z = sg.az + sg.dz * s + lz * LANE
+    const ln = c.line
+    let s = (c.phase + t * c.speed) % ln.L
+    if (ln.dir < 0) s = ln.L - s
+    const fx = ln.dx * ln.dir, fz = ln.dz * ln.dir
+    // 左 = 進む向きを左へ 90 度（日本は左側通行）
+    const lx = fz, lz = -fx
+    c.x = ln.ax + ln.dx * s + lx * ln.lane
+    c.z = ln.az + ln.dz * s + lz * ln.lane
     c.y = world.groundAt(c.x, c.z, 5).h + PHYS.rideHeight
-    c.vx = sg.dx * c.speed; c.vz = sg.dz * c.speed; c.vy = 0
-    c.yaw = Math.atan2(sg.dx, sg.dz)
+    c.vx = fx * c.speed; c.vz = fz * c.speed; c.vy = 0
+    c.yaw = Math.atan2(fx, fz)
     c.pitch = 0; c.roll = 0
   }
 
   return {
     cars,
-    // t はレース時刻。dt は吹き飛んでいる車を動かす刻み
     update(t, dt) {
       for (const c of cars) {
         if (c.knocked > 0) {
@@ -69,7 +66,7 @@ export function createTraffic(world) {
       for (const c of cars) {
         if (c.knocked > 0) continue
         const dx = c.x - racer.x, dz = c.z - racer.z
-        if (Math.abs(c.y - racer.y) > 2 || dx * dx + dz * dz > 2.6 * 2.6) continue
+        if (dx * dx + dz * dz > 2.6 * 2.6 || Math.abs(c.y - racer.y) > 2) continue
         const rel = Math.hypot(racer.vx - c.vx, racer.vz - c.vz)
         if (rel < 7) continue
         c.knocked = 4

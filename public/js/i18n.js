@@ -34,6 +34,7 @@ const D = {
     toLobby: 'ロビーへ', waitRematch: 'ホストの再戦を待っています', netOn: 'ONLINE', netOff: 'OFFLINE',
     pcOnly: '',
     stageCity: '湾岸シティ（街・2周）', stageTouge: '峠と峡谷',
+    shortcutHint: '近道！ バリケードを壊して突っ込め',
     tSteer: '', tGas: 'アクセル', tBrake: 'ブレーキ',
     hintTouch: '左手: 左右でハンドル　右手: アクセル（押すと入りっぱなし）・ブレーキ（曲がりながらでドリフト）・ニトロ'
   },
@@ -71,6 +72,7 @@ const D = {
     toLobby: 'Lobby', waitRematch: 'Waiting for the host', netOn: 'ONLINE', netOff: 'OFFLINE',
     pcOnly: '',
     stageCity: 'Bay City (2 laps)', stageTouge: 'Pass & Canyon',
+    shortcutHint: 'SHORTCUT! Smash through the barricade',
     tSteer: '', tGas: 'GAS', tBrake: 'BRAKE',
     hintTouch: 'Left: steer   Right: gas (tap to toggle), brake (drift while turning), nitro'
   }

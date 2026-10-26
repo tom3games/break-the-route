@@ -88,6 +88,16 @@ export class Race {
         if (by) { by.takedowns = (by.takedowns || 0) + 1; by.car.boost = Math.min(1, by.car.boost + 0.35); by.car.boostLock = false; this.events.push({ t: 'takedown', id: by.id, victim: e.id }) }
       }
       this.observe(e, c.x, c.z)
+      // ニトロ缶（取ってから 10 秒で同じ車がまた取れる）
+      for (let pi = 0; pi < (this.world.pickups || []).length; pi++) {
+        const pk = this.world.pickups[pi]
+        if ((c.x - pk.x) ** 2 + (c.z - pk.z) ** 2 > 3.2 * 3.2) continue
+        const taken = c.taken || (c.taken = {})
+        if (taken[pi] > this.t) continue
+        taken[pi] = this.t + 10
+        c.boost = Math.min(1, c.boost + pk.amount); c.boostLock = false
+        this.events.push({ t: 'pickup', id: e.id, pi })
+      }
       // 一般車に当てたら吹き飛ばす（ニトロが少し戻る）
       if (this.traffic) {
         const h = this.traffic.hitBy(c)

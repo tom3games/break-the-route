@@ -95,6 +95,7 @@ function loadStage(id) {
   fx.world = world
   hud.world = world
   guidePaths = makeGuidePaths()
+  placePickups()
   if (railIM) { scene.remove(railIM); railIM.dispose(); railIM = null; railIndex.clear() }
   placeProps()
 }
@@ -111,10 +112,55 @@ const guide = new THREE.Group()
   guide.add(edge, arrow)
 }
 scene.add(guide)
+// ニトロ缶（自分が取ると10秒消える）
+let pickupMesh = null
+function placePickups() {
+  if (pickupMesh) { scene.remove(pickupMesh); pickupMesh.dispose() }
+  const list = world.pickups || []
+  const g = new THREE.CylinderGeometry(0.42, 0.42, 1.1, 14)
+  pickupMesh = new THREE.InstancedMesh(g, new THREE.MeshStandardMaterial({ color: 0x3ab6ff, emissive: 0x2a8cff, emissiveIntensity: 1.6, metalness: 0.4, roughness: 0.25 }), Math.max(1, list.length))
+  pickupMesh.count = list.length
+  pickupMesh.frustumCulled = false
+  scene.add(pickupMesh)
+}
+const _pm = new THREE.Matrix4(), _pq = new THREE.Quaternion(), _ps = new THREE.Vector3(), _pp = new THREE.Vector3()
+function updatePickups(now) {
+  if (!pickupMesh) return
+  const list = world.pickups || []
+  const taken = me && me.taken ? me.taken : {}
+  list.forEach((pk, i) => {
+    const off = race && taken[i] > race.t
+    const y = world.groundAt(pk.x, pk.z, 60).h + 1.2 + Math.sin(now / 300 + i) * 0.15
+    _pq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), now / 500 + i)
+    pickupMesh.setMatrixAt(i, _pm.compose(_pp.set(pk.x, y, pk.z), _pq, off ? _ps.set(0, 0, 0) : _ps.set(1, 1, 1)))
+  })
+  pickupMesh.instanceMatrix.needsUpdate = true
+}
+
 // 次のゲートの光の柱（霧に消えないので遠くから見える）
 const beacon = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 160, 20, 1, true).translate(0, 80, 0),
   new THREE.MeshBasicMaterial({ color: 0xff8a1f, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }))
 scene.add(beacon)
+
+// 近道の入口に近づいたら教える（前方 90m 以内、次のゲートへ向かう区間のもの）
+let hintCool = 0
+function updateShortcutHint() {
+  if (!me || mode !== 'race' || !race || race.phase !== 'racing') return
+  hintCool -= 1 / 60
+  if (hintCool > 0) return
+  const fx_ = Math.sin(me.yaw), fz = Math.cos(me.yaw)
+  for (const sc of world.shortcuts || []) {
+    const dx = sc.entry[0] - me.x, dz = sc.entry[1] - me.z, d = Math.hypot(dx, dz)
+    if (d > 90 || d < 12) continue
+    if ((dx * fx_ + dz * fz) / d < 0.3) continue
+    // 近道の出口が、今の位置より次のゲートに近いときだけ（逆走の案内をしない）
+    const g = gateAt(world, Math.min(race.entry(myId).cp, totalGates(world) - 1))
+    if (Math.hypot(sc.exit[0] - g.cx, sc.exit[1] - g.cz) > Math.hypot(me.x - g.cx, me.z - g.cz)) continue
+    hud.message(t('shortcutHint'), Math.round(d) + 'm', 2.2)
+    hintCool = 8
+    break
+  }
+}
 
 function updateGuide(now) {
   const e = me && race ? race.entry(myId) : null
@@ -187,6 +233,7 @@ function placeProps() {
   }
 }
 placeProps()
+placePickups()
 
 const post = makeComposer(renderer, scene, camera)
 function resize() {
@@ -210,7 +257,37 @@ let online = null       // オンライン対戦中なら Online
 let onlineRace = false  // 今のレースがオンラインか
 let menuOpen = false    // オンライン中のメニュー（止まらない）
 let models = new Map()  // id -> CarModel
-const trafficModels = new Map()
+const trafficModels = new Map() // 種類 -> 使い回す車の見た目の列
+// 一般車は百台以上いるので、カメラの近くの車にだけ見た目を割り当てる
+function buildTrafficPool() {
+  for (const list of trafficModels.values()) for (const m of list) { scene.remove(m.group); m.dispose() }
+  trafficModels.clear()
+  if (!race || !race.traffic) return
+  const n = LOW ? { sedan: 12, van: 6, taxi: 4 } : { sedan: 24, van: 12, taxi: 8 }
+  for (const [kind, k] of Object.entries(n)) {
+    const list = []
+    for (let i = 0; i < k; i++) { const m = new ProcCar(kind, 0xffffff); m.group.visible = false; scene.add(m.group); list.push(m) }
+    trafficModels.set(kind, list)
+  }
+}
+const _tcol = new THREE.Color()
+function drawTraffic(dt) {
+  const cx = camera.position.x, cz = camera.position.z
+  const near = race.traffic.cars.map(c => [c, (c.x - cx) ** 2 + (c.z - cz) ** 2]).filter(([, d]) => d < 300 * 300).sort((a, b) => a[1] - b[1])
+  const used = {}
+  for (const [c] of near) {
+    const list = trafficModels.get(c.kind)
+    if (!list) continue
+    const i = used[c.kind] || 0
+    if (i >= list.length) continue
+    used[c.kind] = i + 1
+    const m = list[i]
+    m.group.visible = true
+    if (m.paintColor.getHex() !== c.color) { m.paintColor.setHex(c.color); m.paintMat.color.copy(_tcol.setHex(c.color)) }
+    m.update(c, dt, {})
+  }
+  for (const [kind, list] of trafficModels) for (let i = used[kind] || 0; i < list.length; i++) list[i].group.visible = false
+}
 let paused = false
 let seenBroken = new Set()
 let camMode = 0
@@ -274,12 +351,7 @@ function startRace({ demo = false, view = null } = {}) {
     models.set(e.id, m)
   }
   // 一般車（街だけ）。軽い手続きの車で描く
-  for (const m of trafficModels.values()) { scene.remove(m.group); m.dispose() }
-  trafficModels.clear()
-  if (race.traffic) for (const c of race.traffic.cars) {
-    const m = new ProcCar(c.kind, c.color)
-    scene.add(m.group); trafficModels.set(c.id, m)
-  }
+  buildTrafficPool()
   follow = me || race.entries[0].car
   doneAt = null
   paused = false
@@ -758,7 +830,7 @@ function frame() {
 
   // 一般車
   if (race && race.traffic) {
-    for (const c of race.traffic.cars) { const m = trafficModels.get(c.id); if (m) m.update(c, dt, {}) }
+    drawTraffic(dt)
   }
 
   // デモ中は数秒ごとに先頭付近の車を追う
@@ -774,6 +846,8 @@ function frame() {
 
   updateCamera(dt)
   updateGuide(now)
+  updatePickups(now)
+  updateShortcutHint()
   fx.update(paused ? 0 : dt)
 
   // 次のゲートを光らせる
@@ -816,6 +890,7 @@ function raceEvent(ev) {
   if (!me) return
   if (ev.t === 'go') audio.beep(true)
   if (ev.t === 'takedown' && ev.id === myId) { audio.crash(1.2); hud.message('TAKEDOWN', race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
+  if (ev.t === 'pickup' && ev.id === myId) { hud.feed('NITRO', '+30%'); audio.cp() }
   if (ev.t === 'nearmiss' && ev.id === myId) { hud.feed('NEAR MISS', '+8% NITRO'); if (ev.traffic) audio.horn() }
   if (ev.t === 'smash') {
     fx.sparks(ev.x, ev.y, ev.z, 20, null, 10); fx.flash(ev.x, ev.y + 0.3, ev.z)
@@ -1098,8 +1173,7 @@ setTimeout(() => loadCarModel(Q.carLite ? 'assets/models/car_lite.glb' : 'assets
     models.set(e.id, m)
   }
   if (preview) preview.key = ''
-  for (const [id, m] of trafficModels) { scene.remove(m.group); m.dispose(); trafficModels.delete(id) }
-  if (race && race.traffic) for (const c of race.traffic.cars) { const m = new ProcCar(c.kind, c.color); scene.add(m.group); trafficModels.set(c.id, m) }
+  buildTrafficPool()
 }).catch(err => console.warn('car model', err)), 300)
 addEventListener('pointerdown', () => audio.start(), { once: true })
 

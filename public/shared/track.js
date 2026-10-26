@@ -341,6 +341,9 @@ function build() {
       if (keep > forestDensity(px, pz) * 0.95) continue
       const h = terrain(px, pz)
       if (h < -2.5) continue
+      // 急な斜面（谷の縁など）には生やさない。地面の描画（4m 刻み）と高さがずれて宙に浮いて見える
+      const slope = Math.max(Math.abs(terrain(px + 4, pz) - h), Math.abs(terrain(px - 4, pz) - h), Math.abs(terrain(px, pz + 4) - h), Math.abs(terrain(px, pz - 4) - h))
+      if (slope > 1.6) continue
       if (allSegs.some(sg => segDist(px, pz, sg.ax, sg.az, sg.bx, sg.bz) < sg.hw + 3.5)) continue
       if (boxes.some(o => Math.abs(px - o.cx) < o.hw + 3 && Math.abs(pz - o.cz) < o.hl + 3)) continue
       if (repair.some(q => px > q.x0 - 4 && px < q.x1 + 4 && pz > q.z0 - 4 && pz < q.z1 + 4)) continue
@@ -381,7 +384,20 @@ function build() {
     ]
   ]
 
-  return { roads, slabs, boxes, props, dirt, repair, decor, gates, grid, labels, routes, trees }
+  // 近道（看板・地図・案内に使う）とニトロ缶
+  const shortcuts = [
+    { entry: [0, 400], inA: [0, 418], outB: [0, 546], exit: [0, 560], out: [0, -1], label: 'WALL' },          // 倉庫の壁
+    { entry: [40, 345], inA: [56, 362], outB: [56, 590], exit: [40, 610], out: [0, -1], label: 'JUMP' },       // 建設途中の高架
+    { entry: [0, 640], inA: [0, 650], outB: [0, 782], exit: [0, 800], out: [0, -1], label: 'JUMP' },          // 崩れた橋
+    { entry: [0, 862], inA: [0, 872], outB: [0, 1046], exit: [0, 1100], out: [0, -1], label: 'CLIFF' },       // 鉱山道から崖
+    { entry: [0, 1262], inA: [-42, 1288], outB: [-24, 1728], exit: [0, 1750], out: [0, -1], label: 'OLD ROAD' } // 旧街道
+  ]
+  const pickups = [
+    { x: 0, z: 470, amount: 0.3 }, { x: 0, z: 520, amount: 0.3 },
+    { x: 56, z: 420, amount: 0.3 }, { x: 0, z: 960, amount: 0.3 }, { x: 0, z: 1020, amount: 0.3 },
+    { x: -10, z: 1340, amount: 0.3 }, { x: 2, z: 1468, amount: 0.3 }, { x: 6, z: 1628, amount: 0.3 }
+  ]
+  return { roads, slabs, boxes, props, dirt, repair, decor, gates, grid, labels, routes, trees, shortcuts, pickups }
 }
 
 // ---------------------------------------------------------------- 空間の索引

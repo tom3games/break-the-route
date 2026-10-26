@@ -161,9 +161,13 @@ export function buildScene(scene, world) {
     const sky = new Builder()
     let sd = 3
     const rr = () => (sd = (sd * 16807) % 2147483647) / 2147483647
-    for (let i = 0; i < 140; i++) {
-      const a = rr() * Math.PI * 2, d = 380 + rr() * 520
-      const x = Math.cos(a) * d, z = 360 + Math.sin(a) * d * 1.1
+    // 街の外周（当たり判定のある外周ビル）よりさらに外にだけ置く
+    const cx0 = (BOUNDS.x0 + BOUNDS.x1) / 2, cz0 = (BOUNDS.z0 + BOUNDS.z1) / 2
+    const hx = (BOUNDS.x1 - BOUNDS.x0) / 2 + 120, hz = (BOUNDS.z1 - BOUNDS.z0) / 2 + 120
+    for (let i = 0; i < 160; i++) {
+      const a = rr() * Math.PI * 2, d = 1 + rr() * 0.9
+      const x = cx0 + Math.cos(a) * hx * d * 1.15, z = cz0 + Math.sin(a) * hz * d * 1.1
+      if (Math.abs(x - cx0) < hx && Math.abs(z - cz0) < hz) continue
       const h = 25 + rr() * 110, w2 = 14 + rr() * 26
       sky.box(x, h / 2, z, w2, h / 2, w2 * (0.6 + rr() * 0.8), BUILD_COLORS[i % BUILD_COLORS.length], rr(), { noTop: true, shade: false })
     }
@@ -415,6 +419,36 @@ export function buildScene(scene, world) {
       p.position.set(s.x + sx * Math.cos(s.yaw), h0 + 2.75, s.z)
       root.add(p)
     }
+  }
+
+  // ---------------------------------------- 近道の看板と、地面の矢印
+  {
+    const paint = new Builder()
+    for (const sc of world.shortcuts || []) {
+      const [ax, az] = sc.inA, [bx, bz] = sc.outB
+      const L = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / L, dz = (bz - az) / L
+      const yaw = Math.atan2(dx, dz)
+      for (let d = 6; d < L - 4; d += 9) {
+        const x = ax + dx * d, z = az + dz * d, y = world.groundAt(x, z, 50).h + 0.06
+        // くの字の矢印（進む向きを指す）
+        for (const s2 of [-1, 1]) paint.box(x + Math.cos(yaw) * s2 * 0.9 - dx * 0.6, y, z - Math.sin(yaw) * s2 * 0.9 - dz * 0.6, 0.35, 0.02, 1.3, 0xff8a1f, yaw + s2 * 0.6)
+      }
+      // 入口の看板（道の側を向く）
+      const [ox, oz] = sc.out
+      const sx = sc.inA[0] + ox * 4, sz = sc.inA[1] + oz * 4
+      const h0 = world.groundAt(sx, sz, 50).h
+      const label = (sc.label || '') + '  近道 SHORTCUT'
+      const board = new THREE.Mesh(new THREE.PlaneGeometry(9, 2.6), new THREE.MeshStandardMaterial({ map: textTexture(label.trim(), { bg: '#ff6a1a', fg: '#fff', w: 512, h: 148, font: 'bold 52px sans-serif', stripes: false }), emissive: 0xff6a1a, emissiveIntensity: 0.35, side: THREE.DoubleSide }))
+      board.position.set(sx, h0 + 5.2, sz)
+      board.rotation.y = Math.atan2(ox, oz)
+      root.add(board)
+      for (const s2 of [-4, 4]) {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(0.22, 4, 0.22), new THREE.MeshStandardMaterial({ color: 0x2b2e33 }))
+        p.position.set(sx + Math.cos(board.rotation.y) * s2, h0 + 2, sz - Math.sin(board.rotation.y) * s2)
+        root.add(p)
+      }
+    }
+    if (!paint.empty) root.add(new THREE.Mesh(paint.geometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, emissive: 0xff5a10, emissiveIntensity: 0.25, polygonOffset: true, polygonOffsetFactor: -7, polygonOffsetUnits: -7 })))
   }
 
   // ---------------------------------------- 修理ピット

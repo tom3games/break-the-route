@@ -98,6 +98,9 @@ export function textTexture(text, { bg = '#f2c230', fg = '#14161a', w = 256, h =
     g.fillStyle = bg; g.fillRect(10, 14, w - 20, h - 28)
   }
   g.fillStyle = fg; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle'
+  // 長い文字は枠に収まるまで小さくする
+  let size = Number((font.match(/(\d+)px/) || [0, 40])[1])
+  while (g.measureText(text).width > w * 0.9 && size > 12) { size -= 2; g.font = font.replace(/\d+px/, size + 'px') }
   g.fillText(text, w / 2, h / 2 + 2)
   const t = new THREE.CanvasTexture(cv)
   t.colorSpace = THREE.SRGBColorSpace

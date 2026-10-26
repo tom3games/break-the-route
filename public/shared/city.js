@@ -6,9 +6,10 @@
 // 下の座標は 80m 間隔の設計図で書き、X() Z() で実際の大きさへ伸ばす
 const K = 130 / 80
 const X = x => x * K, Z = z => 40 + (z - 40) * K
-export const CITY_BOUNDS = { x0: X(-280), x1: X(280), z0: -20, z1: Z(720) }
-const XS = [-240, -160, -80, 0, 80, 160, 240].map(X)
-const ZS = [40, 120, 200, 280, 360, 440, 520, 600, 680].map(Z)
+// 街は 9x10 区画（2026-10-26 本人「マップを広く、GTA に寄せて」で外側に1〜2列ずつ足した）。レースのコースは内側
+export const CITY_BOUNDS = { x0: X(-360), x1: X(360), z0: -20, z1: Z(880) }
+const XS = [-320, -240, -160, -80, 0, 80, 160, 240, 320].map(X)
+const ZS = [40, 120, 200, 280, 360, 440, 520, 600, 680, 760, 840].map(Z)
 const WIDE_X = new Set([X(-240), 0, X(240)]), WIDE_Z = new Set([Z(40), Z(680)])
 const MID = Z(332)
 const CANAL = { z0: MID - 15, z1: MID + 15, floor: -8 }
@@ -29,10 +30,13 @@ const roadW = (axis, v) => (axis === 'x' ? WIDE_X.has(v) : WIDE_Z.has(v)) ? WIDE
 // 区画の種類（左下の交差点の x, z で決める）
 const BLOCK = {}
 for (const [x, z, k] of [[-80, 440, 'park'], [80, 120, 'park'], [0, 520, 'plaza'], [-160, 200, 'parking'], [160, 440, 'site'],
-  [-240, 280, 'bank'], [-160, 280, 'bank'], [-80, 280, 'bank'], [0, 280, 'bank'], [80, 280, 'bank'], [160, 280, 'bank'], [-240, 520, 'park'], [160, 120, 'parking']]) BLOCK[`${X(x)},${Z(z)}`] = k
+  [-320, 280, 'bank'], [-240, 280, 'bank'], [-160, 280, 'bank'], [-80, 280, 'bank'], [0, 280, 'bank'], [80, 280, 'bank'], [160, 280, 'bank'], [240, 280, 'bank'],
+  [-240, 520, 'park'], [160, 120, 'parking'], [240, 680, 'park'], [-320, 760, 'parking'], [0, 760, 'plaza'], [-160, 760, 'site'],
+  // レースの曲がり角の内側は「近道の空き地」（入口と出口はバリケードだけ）
+  [-240, 360, 'lot:se-nw'], [-240, 600, 'lot:sw-ne'], [80, 600, 'lot:ne-sw'], [80, 40, 'lot:nw-se']]) BLOCK[`${X(x)},${Z(z)}`] = k
 
 export function buildCity() {
-  const roads = [], slabs = [], boxes = [], props = [], dirt = [], repair = [], decor = [], labels = [], grassRects = [], dirtRects = [], trees = []
+  const roads = [], slabs = [], boxes = [], props = [], dirt = [], repair = [], decor = [], labels = [], grassRects = [], dirtRects = [], trees = [], shortcuts = [], lotRects = [], pickups = []
   const tree = (x, z, s = 0.62) => { trees.push({ x, y: 0, z, s, r: x * 0.37 + z }); boxes.push({ cx: x, cz: z, yaw: 0, hw: 0.45, hl: 0.45, y0: -1, h: 14, kind: 'tree' }) }
   const road = (pts, w = 12, surf = 'road') => roads.push({ pts, w, surf })
   const box = (x0, z0, x1, z1, h, kind = 'building', y0 = 0) =>
@@ -102,6 +106,46 @@ export function buildCity() {
       slabs.push({ cx: (x0 + x1) / 2 + 10, cz: (z0 + z1) / 2 - 10, yaw: 0, hw: 3.2, hl: 4.5, y0: 0.02, y1: 1.9, thick: 0.4, surf: 'wood', solid: true, kind: 'kicker' })
       prop('lumber', x0 + 10, z1 - 10, 0.3); prop('lumber', x1 - 12, z1 - 8, -0.2)
       labels.push({ x: (x0 + x1) / 2, z: (z0 + z1) / 2, t: 'SITE' })
+    } else if (kind.startsWith('lot')) {
+      // 入口と出口（区画のどの辺のどこか）。対角に突っ切ると曲がり角をショートカットできる
+      // lot:se-nw = 南辺の東寄りから入り、西辺の北寄りへ抜ける、など
+      const side = (c, t) => {
+        const L = 30 // 入口の幅
+        // 入口が区画の端からはみ出さないように寄せる
+        const span = (c === 's' || c === 'n') ? x1 - x0 : z1 - z0
+        t = Math.max((L / 2 + 3) / span, Math.min(1 - (L / 2 + 3) / span, t))
+        if (c === 's') return { a: [x0 + (x1 - x0) * t - L / 2, z0], b: [x0 + (x1 - x0) * t + L / 2, z0], mid: [x0 + (x1 - x0) * t, z0], out: [0, -1] }
+        if (c === 'n') return { a: [x0 + (x1 - x0) * t - L / 2, z1], b: [x0 + (x1 - x0) * t + L / 2, z1], mid: [x0 + (x1 - x0) * t, z1], out: [0, 1] }
+        if (c === 'w') return { a: [x0, z0 + (z1 - z0) * t - L / 2], b: [x0, z0 + (z1 - z0) * t + L / 2], mid: [x0, z0 + (z1 - z0) * t], out: [-1, 0] }
+        return { a: [x1, z0 + (z1 - z0) * t - L / 2], b: [x1, z0 + (z1 - z0) * t + L / 2], mid: [x1, z0 + (z1 - z0) * t], out: [1, 0] }
+      }
+      // 入口は来る向きの奥の端、出口は出ていく向きの奥の端（対角がいちばん長くなる）
+      const spec = { 'lot:se-nw': [['s', 1], ['w', 1]], 'lot:sw-ne': [['w', 0], ['n', 1]], 'lot:ne-sw': [['n', 0], ['e', 0]], 'lot:nw-se': [['e', 1], ['s', 0]] }[kind]
+      const ent = side(...spec[0]), ext = side(...spec[1])
+      // 周りは低い塀（壊れない）。入口と出口だけ赤白のバリケード
+      const wall = (ax, az, bx, bz) => { if (Math.hypot(bx - ax, bz - az) < 1) return; boxes.push({ cx: (ax + bx) / 2, cz: (az + bz) / 2, yaw: 0, hw: Math.max(0.4, Math.abs(bx - ax) / 2), hl: Math.max(0.4, Math.abs(bz - az) / 2), y0: 0, h: 1.3, kind: 'lotwall' }) }
+      const edges = { s: [[x0, z0], [x1, z0]], n: [[x0, z1], [x1, z1]], w: [[x0, z0], [x0, z1]], e: [[x1, z0], [x1, z1]] }
+      for (const [c, [[ax, az], [bx, bz]]] of Object.entries(edges)) {
+        const gaps = [ent, ext].filter(g => (c === 's' || c === 'n') ? Math.abs(g.a[1] - az) < 0.1 && Math.abs(g.b[1] - az) < 0.1 : Math.abs(g.a[0] - ax) < 0.1 && Math.abs(g.b[0] - ax) < 0.1)
+        if (c === 's' || c === 'n') { let x = ax; for (const g of gaps.sort((p, q) => p.a[0] - q.a[0])) { wall(x, az, g.a[0], az); x = g.b[0] } wall(x, az, bx, az) }
+        else { let z = az; for (const g of gaps.sort((p, q) => p.a[1] - q.a[1])) { wall(ax, z, ax, g.a[1]); z = g.b[1] } wall(ax, z, ax, bz) }
+      }
+      for (const g of [ent, ext]) {
+        const horiz = Math.abs(g.a[1] - g.b[1]) < 0.1
+        const n = 10
+        for (let k = 0; k < n; k++) {
+          const t = (k + 0.5) / n
+          prop('barricade', g.a[0] + (g.b[0] - g.a[0]) * t, g.a[1] + (g.b[1] - g.a[1]) * t, horiz ? 0 : Math.PI / 2)
+        }
+      }
+      // 対角の途中にジャンプ台
+      const mx = (ent.mid[0] + ext.mid[0]) / 2, mz = (ent.mid[1] + ext.mid[1]) / 2
+      const dx = ext.mid[0] - ent.mid[0], dz = ext.mid[1] - ent.mid[1]
+      slabs.push({ cx: mx, cz: mz, yaw: Math.atan2(dx, dz), hw: 3.6, hl: 5, y0: 0.02, y1: 2.0, thick: 0.4, surf: 'wood', solid: true, kind: shortcuts.length % 2 ? 'roll' : 'kicker', roll: shortcuts.length % 2 ? 1 : 0 })
+      // 近道のごほうび: 対角の上にニトロ缶を3つ
+      for (const f of [0.25, 0.68, 0.85]) pickups.push({ x: ent.mid[0] + dx * f, z: ent.mid[1] + dz * f, amount: 0.3 })
+      shortcuts.push({ entry: [ent.mid[0] + ent.out[0] * 8, ent.mid[1] + ent.out[1] * 8], inA: ent.mid, outB: ext.mid, exit: [ext.mid[0] + ext.out[0] * 8, ext.mid[1] + ext.out[1] * 8], out: ent.out })
+      lotRects.push({ x0, z0, x1, z1 })
     } else if (kind === 'bank') {
       // 運河沿いの遊歩道（並木と街灯）
       for (let x = x0 + 6; x < x1 - 4; x += 14) { decor.push({ kind: 'parktree', x, z: z0 + 4 }); prop('lamp', x + 7, z1 - 2) }
@@ -126,7 +170,7 @@ export function buildCity() {
     const ox = roadW('x', x) / 2 + 1.6, oz = roadW('z', z) / 2 + 1.6
     prop('signal', x - ox, z - oz, 0); prop('signal', x + ox, z + oz, Math.PI)
   }
-  for (let z = ZS[0] + 20; z < ZS[ZS.length - 1]; z += 26) { if (z > CANAL.z0 - 14 && z < CANAL.z1 + 14) continue; if (nearCross(z, ZS)) continue; for (const s of [-1, 1]) tree(s * (WIDE / 2 + 2.6), z) }
+  for (let z = ZS[0] + 20; z < ZS[ZS.length - 1]; z += 26) { if (z > CANAL.z0 - 14 && z < CANAL.z1 + 14) continue; if (nearCross(z, ZS)) continue; for (const s of [-1, 1]) { const tx = s * (WIDE / 2 + 2.6); if (roads.some(r => r.w <= ALLEY && Math.abs(r.pts[0][1] - z) < ALLEY && Math.min(r.pts[0][0], r.pts[1][0]) - 4 < tx && Math.max(r.pts[0][0], r.pts[1][0]) + 4 > tx)) continue; tree(tx, z) } }
   for (const d of decor) if (d.kind === 'parktree') tree(d.x, d.z, 0.7)
 
   // ---------------- 道ばたのジャンプ台（片側の車線だけ）
@@ -150,14 +194,21 @@ export function buildCity() {
 
   // 走行線は設計図の座標で書いて伸ばす
   const P = pts => pts.map(([x, z]) => [X(x), Z(z)])
+  // 近道を通る走行線: 区画の外の手前 → 入口 → 対角 → 出口 → 次の通り
+  const cut = (sc, before, after) => [before, sc.entry, sc.inA, sc.outB, sc.exit, after]
+  const [s0, s1, s2, s3] = shortcuts // 作った順: 西の北行き / 西の東行き / 南東 / 北東
   const routes = [
     [{ id: 'A', risk: 0, pts: P([[0, 92], [0, 346], [-5, 355], [-16, 360], [-126, 360]]) }],
-    [{ id: 'A', risk: 0, pts: P([[-126, 360], [-226, 360], [-236, 365], [-240, 376], [-240, 566]]) }],
-    [{ id: 'A', risk: 0, pts: P([[-240, 566], [-240, 668], [-235, 676], [-224, 680], [46, 680]]) }],
-    [{ id: 'A', risk: 0, pts: P([[46, 680], [146, 680], [156, 675], [160, 664], [160, 474]]) }],
+    [{ id: 'A', risk: 0, pts: P([[-126, 360], [-226, 360], [-236, 365], [-240, 376], [-240, 566]]) },
+     { id: 'B', risk: 0.4, pts: [...P([[-126, 360]]), ...cut(s0, [s0.entry[0] + 30, Z(360)], [X(-240), s0.exit[1] + 30]), ...P([[-240, 566]])] }],
+    [{ id: 'A', risk: 0, pts: P([[-240, 566], [-240, 668], [-235, 676], [-224, 680], [46, 680]]) },
+     { id: 'B', risk: 0.4, pts: [...P([[-240, 566]]), ...cut(s1, [X(-240), s1.entry[1] - 30], [s1.exit[0] + 30, Z(680)]), ...P([[46, 680]])] }],
+    [{ id: 'A', risk: 0, pts: P([[46, 680], [146, 680], [156, 675], [160, 664], [160, 474]]) },
+     { id: 'B', risk: 0.4, pts: [...P([[46, 680]]), ...cut(s3, [s3.entry[0] - 30, Z(680)], [X(160), s3.exit[1] - 30]), ...P([[160, 474]])] }],
     [
       { id: 'E', risk: 0.6, pts: P([[160, 474], [160, 380], [160, 300], [160, 56], [155, 45], [144, 40], [34, 40]]) },
-      { id: 'A', risk: 0, pts: P([[160, 474], [160, 454], [165, 444], [176, 440], [226, 440], [236, 435], [240, 424], [240, 56], [235, 45], [224, 40], [34, 40]]) }
+      { id: 'A', risk: 0, pts: P([[160, 474], [160, 454], [165, 444], [176, 440], [226, 440], [236, 435], [240, 424], [240, 56], [235, 45], [224, 40], [34, 40]]) },
+      { id: 'B', risk: 0.5, pts: [...P([[160, 474], [160, 380], [160, 300]]), ...cut(s2, [X(160), s2.entry[1] + 30], [s2.exit[0] - 30, Z(40)]), ...P([[34, 40]])] }
     ],
     [{ id: 'A', risk: 0, pts: P([[34, 40], [12, 40], [3, 45], [0, 56], [0, 86]]) }]
   ]
@@ -171,7 +222,7 @@ export function buildCity() {
 
   return {
     roads, slabs, boxes, props, dirt: dirtRects, repair, decor: [], gates, grid, labels, routes, trees, laps: 2,
-    bounds: CITY_BOUNDS, fallY: -3, water: { z0: CANAL.z0, z1: CANAL.z1, y: -2.2 }, trafficLoops, grassRects, cityGrid: { XS, ZS, WIDE_X: [...WIDE_X], WIDE_Z: [...WIDE_Z] },
+    shortcuts, lotRects, pickups, bounds: CITY_BOUNDS, fallY: -3, water: { z0: CANAL.z0, z1: CANAL.z1, y: -2.2 }, trafficLoops, grassRects, cityGrid: { XS, ZS, WIDE_X: [...WIDE_X], WIDE_Z: [...WIDE_Z] },
     ground: (x, z) => grassRects.some(r => x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) ? 'grass' : 'road'
   }
 }
