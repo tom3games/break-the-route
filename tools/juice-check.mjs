@@ -61,12 +61,13 @@ for (const [w, h] of [[844, 390], [390, 844]]) {
     for (let k = 0; k < 2; k++) {
       B.teleport(0, 420, 0, 40)
       o.x = me.x + 2.8; o.z = me.z + 30; o.y = me.y; o.yaw = 0; o.vx = o.vz = 0; o.freeze = 3
-      for (let i = 0; i < 30; i++) { me.vx = 0; me.vz = Math.max(me.vz, 40); await sleep(25) }
-      await sleep(200)
+      // 追い越すまで待つ（headless の webkit はシミュレーションが実時間より遅いことがある）
+      for (let i = 0; i < 160 && me.z < o.z + 8; i++) { me.vx = 0; me.vz = Math.max(me.vz, 40); await sleep(25) }
+      await sleep(600)
     }
-    return window.__rw.slice(before)
+    return { rw: window.__rw.slice(before), hitAt: B.juice.hitAt, t: r.t, dx: me.x - o.x, slow: B.juice.slow, phase: r.phase, wreck: me.wreck }
   })
-  ok(nm.some(t => t.includes('NEAR MISS')), tag + ' ニアミスの文字が出る', nm.join(' / '))
+  ok(nm.rw.some(t => t.includes('NEAR MISS')), tag + ' ニアミスの文字が出る', nm.rw.join(' / ') + ' ' + JSON.stringify({ ...nm, rw: undefined }))
   // ニトロの流れる線
   await p.evaluate(() => { window.__btr.teleport(0, 420, 0, 40); window.__btr.me.boost = 1 })
   await p.keyboard.down('Shift'); await p.keyboard.down('KeyW')

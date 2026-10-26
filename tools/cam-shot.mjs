@@ -19,6 +19,13 @@ for (const [w, h] of [[390, 844], [844, 390]]) {
   await p.evaluate(() => { window.__btr.teleport(0, 420, 0, 25); window.__btr.autopilot() })
   await p.waitForTimeout(2500)
   await p.screenshot({ path: `${OUT}${label}-${w}x${h}.png` })
+  // 建物を近くで見る（カメラを止めて、通りの脇から見上げる）
+  await p.evaluate(() => { const B = window.__btr; B.stopAutopilot(); B.teleport(0, 420, 0, 0); window.__freeze = true; const c = B.camera; c.position.set(-6, 2.2, 400); c.lookAt(-30, 9, 450); c.fov = 62; c.updateProjectionMatrix() })
+  await p.waitForTimeout(800)
+  await p.screenshot({ path: `${OUT}${label}-${w}x${h}-street.png` })
+  await p.evaluate(() => { const c = window.__btr.camera; c.position.set(10, 30, 330); c.lookAt(-40, 10, 480) })
+  await p.waitForTimeout(600)
+  await p.screenshot({ path: `${OUT}${label}-${w}x${h}-high.png` })
   console.log(label, `${w}x${h}`, 'errors', errs.length, errs.slice(0, 2).join(' | '))
   await ctx.close()
 }

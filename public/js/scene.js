@@ -4,6 +4,7 @@ import { Builder, textTexture } from './geo.js'
 import { pbr, boxMap, terrainMaterial } from './look.js'
 import { buildForest, buildTufts } from './trees.js'
 import { Q } from './quality.js'
+import { createFacade } from './facade.js'
 import { terrain, toWorld, slabTop, forestDensity } from '../shared/track.js'
 import { DESTRUCT } from '../shared/config.js'
 
@@ -226,13 +227,29 @@ export function buildScene(scene, world) {
   // ---------------------------------------- 壊れない箱（建物・壁・柵）
   {
     const bld = new Builder(), conc = new Builder(), rock = new Builder(), met = new Builder(), other = new Builder()
+    const facade = createFacade()
     let k = 0
     for (const o of world.colliders) {
       if (o.slab || o.kind === 'bound' || o.kind === 'pylon' || o.kind === 'tree') continue
       const cy = o.y0 + o.h / 2
       if (o.kind === 'building') {
-        const color = BUILD_COLORS[(k++ * 5) % BUILD_COLORS.length]
-        bld.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, color, o.yaw, { noTop: true, shade: false })
+        const kk = k++
+        const color = new THREE.Color(BUILD_COLORS[(kk * 5) % BUILD_COLORS.length]).lerp(new THREE.Color(0xffffff), 0.35)
+        // 外壁の型: 高いビルはガラスか事務所、低いものはマンション・レンガ・事務所
+        const style = o.h > 55 ? [2, 0, 1, 2, 0][kk % 5] : [1, 0, 3, 1, 2, 3, 0][kk % 7]
+        if (o.yaw) bld.box(o.cx, cy, o.cz, o.hw, o.h / 2, o.hl, color.getHex(), o.yaw, { noTop: true, shade: false })
+        else facade.building(o.cx - o.hw, o.cz - o.hl, o.cx + o.hw, o.cz + o.hl, o.y0, o.h, style, color.getHex(), (kk * 0.618) % 1)
+        // 縦看板（通りから見える面の角）と屋上の広告
+        if (!o.yaw && kk % 3 === 0 && o.hw < 80) facade.sign(o.cx + o.hw - 2.2, o.y0 + 5.2, o.cz + o.hl, 0, 1, 1.25, 5, kk % 2, kk)
+        if (!o.yaw && kk % 3 === 1 && o.hl < 80) facade.sign(o.cx - o.hw, o.y0 + 5.2, o.cz - o.hl + 2.2, -1, 0, 1.25, 5, (kk + 1) % 2, kk)
+        if (!o.yaw && kk % 5 === 2 && o.h < 45 && o.hw > 8) {
+          const by = o.y0 + o.h + 2.2
+          facade.billboard(o.cx, by, o.cz + o.hl - 3, 0, 1, 12, 6, kk)
+          for (const sx of [-4.5, 4.5]) met.box(o.cx + sx, o.y0 + o.h + 1.1, o.cz + o.hl - 3.3, 0.15, 1.1, 0.15, 0x6d7278, 0)
+        }
+        // 屋上: 給水タンクとアンテナ（高いビル）
+        if (kk % 4 === 3) met.box(o.cx - o.hw * 0.3, o.y0 + o.h + 1.6, o.cz + o.hl * 0.25, 1.4, 1.3, 1.4, 0x9aa3ab, 0)
+        if (o.h > 55) met.box(o.cx, o.y0 + o.h + 5, o.cz, 0.12, 5, 0.12, 0xc9ced6, 0)
         // 屋上（コンクリート）と塔屋・室外機
         conc.box(o.cx, o.y0 + o.h + 0.15, o.cz, o.hw + 0.25, 0.3, o.hl + 0.25, 0xbab6ae, o.yaw)
         conc.box(o.cx + o.hw * 0.3, o.y0 + o.h + 1.4, o.cz - o.hl * 0.2, Math.min(3, o.hw * 0.3), 1.2, Math.min(2.5, o.hl * 0.25), 0xcfcac2, 0)
@@ -257,6 +274,11 @@ export function buildScene(scene, world) {
     for (const [b, mat] of [[bld, buildingMat], [conc, concrete], [rock, rockMat], [met, metal], [other, vc]]) {
       if (b.empty) continue
       const m = new THREE.Mesh(b.geometry(), mat)
+      m.castShadow = true; m.receiveShadow = true
+      root.add(m)
+    }
+    if (!facade.empty) {
+      const m = new THREE.Mesh(facade.geometry(), facade.material)
       m.castShadow = true; m.receiveShadow = true
       root.add(m)
     }

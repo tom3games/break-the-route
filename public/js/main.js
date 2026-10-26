@@ -1201,21 +1201,25 @@ function nearMiss() {
   if (!me || !race || race.phase !== 'racing' || me.wreck > 0) return
   const v = speedOf(me)
   const fx_ = Math.sin(me.yaw), fz = Math.cos(me.yaw)
+  // 真横を通り過ぎた瞬間（前後の向きが入れ替わった）で判定する。fps が低くても取りこぼさない
+  const prev = juice.along || (juice.along = new Map()), seen = new Set()
   const look = (o, id, ov) => {
     const dx = o.x - me.x, dz = o.z - me.z
-    if (dx * dx + dz * dz > 36) return
+    if (dx * dx + dz * dz > 400) return
+    seen.add(id)
     const along = dx * fx_ + dz * fz, side = Math.abs(dx * fz - dz * fx_)
+    const p0 = prev.get(id); prev.set(id, along)
     const rel = Math.abs(v - ov)
-    if (Math.abs(along) < 2.6 && side > 1.9 && side < 3.6 && rel > 10 && !(juice.cool.get(id) > race.t)) juice.near.set(id, race.t + 0.35)
+    if (p0 != null && Math.sign(p0) !== Math.sign(along) && Math.abs(p0 - along) < 12 && side > 1.9 && side < 3.6 && rel > 10 && !(juice.cool.get(id) > race.t)) juice.near.set(id, race.t + 0.35)
   }
   if (v > 24) {
     if (race.traffic) for (const o of race.traffic.cars) look(o, o.id, o.speed || 0)
     for (const e of race.entries) if (e.car !== me && !e.car.wreck) look(e.car, e.id, speedOf(e.car))
   }
+  for (const id of prev.keys()) if (!seen.has(id)) prev.delete(id)
   for (const [id, at] of juice.near) if (race.t >= at) {
     juice.near.delete(id)
-    juice.cool.set(id, race.t + 3)
-    if (race.t - juice.hitAt > 0.6) reward('NEAR MISS', '', 0.06)
+    if (race.t - juice.hitAt > 0.6) { juice.cool.set(id, race.t + 3); reward('NEAR MISS', '', 0.06) }
   }
 }
 
