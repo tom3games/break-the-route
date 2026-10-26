@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>BREAK THE ROUTE</title>
-<meta name="description" content="壊して、飛んで、自分の道を作る3D破壊レース。フェンスも壁も突き破り、崩れた橋をブーストで飛び越えて、誰より先にゴールへ。ブラウザで遊べる。">
+<meta name="description" content="警察と犯人の3Dカーチェイス。犯人は3分逃げ切るか隠れ家へ、警察はぶつけて止めて逮捕。街の柵も一般車も吹き飛ばせる。スマホのブラウザで遊べる。">
 <meta property="og:title" content="BREAK THE ROUTE">
-<meta property="og:description" content="壊して、飛んで、自分の道を作る3D破壊レース。崩れた橋をブーストで飛び越えろ。">
+<meta property="og:description" content="警察と犯人の3Dカーチェイス。逃げ切るか、捕まえるか。スマホのブラウザで遊べる。">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://tom3games.github.io/break-the-route/og.jpg">
+<meta property="og:image" content="https://tom3games.github.io/break-the-route/og.jpg?v=7">
 <meta property="og:url" content="https://tom3games.github.io/break-the-route/">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Dela+Gothic+One&family=M+PLUS+1p:wght@500;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 <script>
   // 起動に失敗したときに原因を画面に出す（モジュールが読めないと module 内の catch は動かない）
   window.__btrErrors = []
@@ -53,9 +53,12 @@
       </label>
       <div class="carpick" id="carPickShort"></div>
     </div>
-    <div class="carpick stagepick" id="stagePick"></div>
+    <div class="carpick stagepick hidden" id="stagePick"></div>
+    <div class="btns roles">
+      <button id="btnOffline" class="btn primary role-robber"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9c3-1 6-1.5 9-1.5s6 .5 9 1.5v3.5c-3 1-6 1.5-9 1.5s-6-.5-9-1.5z" fill="currentColor"/><circle cx="8.3" cy="10.8" r="1.6" fill="#14161a"/><circle cx="15.7" cy="10.8" r="1.6" fill="#14161a"/></svg><span data-t="offline"></span></button>
+      <button id="btnOfflineCop" class="btn primary role-cop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="currentColor"/><path d="m12 7 1.5 3 3.3.5-2.4 2.3.6 3.3L12 14.6 9 16.1l.6-3.3-2.4-2.3 3.3-.5z" fill="#14161a"/></svg><span data-t="offlineCop"></span></button>
+    </div>
     <div class="btns">
-      <button id="btnOffline" class="btn primary" data-t="offline"></button>
       <button id="btnOnline" class="btn" data-t="onlineSoon" disabled></button>
     </div>
     <p class="note" id="onlineNote"></p>
@@ -113,7 +116,7 @@
         <button id="btnLobbyGarage" class="btn ghost small" data-t="garage"></button>
       </div>
       <div class="lobby-row host-only">
-        <div class="carpick stagepick" id="stagePickLobby"></div>
+        <div class="carpick stagepick hidden" id="stagePickLobby"></div>
         <label class="field small"><span data-t="cpu"></span><select id="cpuOnline"></select></label>
         <button id="btnStartOnline" class="btn primary" data-t="start"></button>
       </div>
@@ -158,11 +161,12 @@
 <!-- レース中の表示 -->
 <section id="hud" class="hidden">
   <div class="hud-tl">
-    <div class="pos"><b id="hPos">1</b><span id="hPosOf">/8</span></div>
-    <div class="time" id="hTime">0:00.00</div>
+    <div class="role" id="hRole"></div>
+    <div class="time" id="hTime">3:00</div>
     <div class="nextcp" id="hNext"></div>
   </div>
-  <div class="hud-top"><div class="track" id="hTrack"></div></div>
+  <div class="hud-top"><div class="heat" id="hHeat"></div><div class="bust" id="hBust"><span></span><b><i></i></b></div></div>
+  <div class="radio" id="hRadio"></div>
   <ol class="hud-tr" id="hStand"></ol>
   <canvas id="miniMap" width="220" height="220"></canvas>
   <div class="hud-bl">
@@ -227,7 +231,8 @@
 <section id="results" class="screen hidden">
   <div class="panel wide results">
     <div class="stamp" id="rStamp"></div>
-    <h2 data-t="results"></h2>
+    <h2 id="rTitle"></h2>
+    <p class="reason" id="rReason"></p>
     <table class="rtable"><tbody id="rBody"></tbody></table>
     <div class="earn" id="rEarn"></div>
     <div class="btns">
@@ -238,6 +243,6 @@
   </div>
 </section>
 
-<script type="module" src="js/main.js?v=6"></script>
+<script type="module" src="js/main.js?v=7"></script>
 </body>
 </html>

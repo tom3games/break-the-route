@@ -124,6 +124,55 @@ export class Audio {
   }
   land(power = 1) { this._tone({ freq: 90, to: 40, dur: 0.25, gain: Math.min(0.9, 0.3 + power * 0.04) }); this._burst({ freq: 500, dur: 0.2, gain: 0.25, decay: 0.2 }) }
   boostStart() { this._burst({ freq: 600, type: 'bandpass', q: 0.7, dur: 0.5, gain: 0.4, decay: 0.45 }); this._tone({ freq: 180, to: 520, dur: 0.35, gain: 0.12, type: 'sawtooth' }) }
+  // サイレン（ピーポー: 770Hz と 960Hz を 0.65 秒ずつ）。vol 0..1
+  siren(vol) {
+    if (!this.ctx) return
+    const ctx = this.ctx, t = ctx.currentTime
+    if (!this.sir) {
+      if (vol <= 0) return
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 865
+      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 0.77
+      const lg = ctx.createGain(); lg.gain.value = 95
+      lfo.connect(lg).connect(o.frequency)
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 0.8
+      const g = ctx.createGain(); g.gain.value = 0
+      o.connect(f).connect(g).connect(this.sfx); o.start(); lfo.start()
+      this.sir = { g }
+    }
+    this.sir.g.gain.setTargetAtTime(Math.max(0, Math.min(1, vol)) * 0.11, t, 0.2)
+  }
+  // ヘリのローター（低いバタバタ）。vol 0..1
+  rotor(vol) {
+    if (!this.ctx) return
+    const ctx = this.ctx, t = ctx.currentTime
+    if (!this.rot) {
+      if (vol <= 0) return
+      const src = ctx.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 180
+      const am = ctx.createGain(); am.gain.value = 0.5
+      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 11
+      const lg = ctx.createGain(); lg.gain.value = 0.5
+      lfo.connect(lg).connect(am.gain)
+      const g = ctx.createGain(); g.gain.value = 0
+      src.connect(f).connect(am).connect(g).connect(this.sfx); src.start(); lfo.start()
+      this.rot = { g }
+    }
+    this.rot.g.gain.setTargetAtTime(Math.max(0, Math.min(1, vol)) * 0.5, t, 0.3)
+  }
+  // ロックオンの警告音（ピピッ）
+  lockon() { for (let i = 0; i < 3; i++) this._tone({ freq: 1800, to: 1800, dur: 0.05, gain: 0.08, type: 'square', when: i * 0.09 }) }
+  // 着弾の爆発
+  explosion(power = 1) {
+    this._burst({ freq: 700, dur: 1.4, gain: 0.9 * power, decay: 1.3 })
+    this._tone({ freq: 90, to: 25, dur: 1.0, gain: 1.0 * power })
+    this._burst({ freq: 3000, type: 'highpass', dur: 0.3, gain: 0.3 * power, decay: 0.3 })
+  }
+  // 無線の合図（短い2音と雑音）
+  radio() {
+    this._tone({ freq: 1250, to: 1250, dur: 0.06, gain: 0.07, type: 'square' })
+    this._tone({ freq: 1650, to: 1650, dur: 0.07, gain: 0.06, type: 'square', when: 0.08 })
+    this._burst({ freq: 2200, type: 'bandpass', q: 0.8, dur: 0.25, gain: 0.05, decay: 0.22 })
+  }
   horn() { for (const f of [392, 494]) this._tone({ freq: f, to: f, dur: 0.38, gain: 0.07, type: 'square' }) }
   beep(high = false) { this._tone({ freq: high ? 1320 : 660, to: high ? 1320 : 660, dur: high ? 0.6 : 0.22, gain: 0.25, type: 'square' }) }
   cp() { this._tone({ freq: 880, to: 880, dur: 0.1, gain: 0.18, type: 'square' }); this._tone({ freq: 1320, to: 1320, dur: 0.18, gain: 0.18, type: 'square', when: 0.1 }) }

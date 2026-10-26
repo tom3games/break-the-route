@@ -317,3 +317,74 @@ body.touch .stunt-feed div { font-size: 16px; }
 .stagepick { margin: 0 0 10px; }
 .stagepick button { font-family: var(--f-body); font-size: 12.5px; letter-spacing: 0; }
 @media (max-height: 380px) { .stagepick { margin-bottom: 4px; } .stagepick button { padding: 5px 4px; font-size: 11px; } }
+
+/* ---------------------------------------------------------- 警察と犯人 */
+.roles .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.roles .btn svg { width: 22px; height: 22px; flex: 0 0 auto; }
+.btn.role-cop { background: #2f6fe0; border-color: #2f6fe0; box-shadow: 0 4px 0 #1b418a; }
+.role { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 6px; border-radius: 6px; font: 800 15px var(--f-body); color: #fff; }
+.role svg { width: 22px; height: 22px; }
+.role.cop { background: rgba(47,111,224,0.9); }
+.role.robber { background: rgba(214,38,74,0.9); }
+.time { font-family: var(--f-num); font-weight: 700; font-size: 30px; color: #fff; margin-top: 4px; }
+.time.low { color: #ff4d4d; animation: blinkT .5s steps(2) infinite; }
+@keyframes blinkT { 50% { opacity: .4 } }
+.heat { display: flex; justify-content: center; gap: 4px; }
+.heat span { width: 26px; height: 26px; color: rgba(20,22,26,0.45); filter: drop-shadow(0 2px 3px rgba(0,0,0,.6)); }
+.heat span svg { width: 100%; height: 100%; display: block; }
+.heat span.on { color: #ffd23a; }
+.heat.bump span.on { animation: starPop .5s ease-out; }
+@keyframes starPop { 40% { transform: scale(1.5) } }
+.bust { margin: 8px auto 0; width: 100%; max-width: 280px; opacity: 0; transition: opacity .2s; }
+.bust.show { opacity: 1; }
+.bust span { display: block; text-align: center; font: 800 12px var(--f-body); color: #fff; text-shadow: 0 1px 3px #000; margin-bottom: 3px; }
+.bust b { display: block; height: 10px; border-radius: 5px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.4); overflow: hidden; }
+.bust i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2f6fe0, #ff2d55); }
+.radio { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: min(92vw, 560px); padding: 7px 14px; border-radius: 8px; background: rgba(12,20,40,0.82); border: 1px solid rgba(90,168,255,0.7); color: #dfeaff; font: 700 14px var(--f-body); opacity: 0; pointer-events: none; }
+.radio svg { width: 18px; height: 18px; flex: 0 0 auto; color: #5aa8ff; }
+.radio.show { animation: radioIn 3.4s ease-out forwards; }
+@keyframes radioIn { 0% { opacity: 0; transform: translate(-50%, -8px) } 8% { opacity: 1; transform: translate(-50%, 0) } 85% { opacity: 1 } 100% { opacity: 0 } }
+.hud-tr li { grid-template-columns: 20px 1fr auto; }
+.hud-tr li .ic svg { width: 18px; height: 18px; display: block; }
+.rtable td.n svg { width: 26px; height: 26px; display: block; }
+.rtable td.role-cop { color: #5aa8ff; }
+.rtable td.role-robber { color: #ff4d6d; }
+.rtable tr.won td { color: #fff; }
+.results .reason { margin: -6px 0 0; color: var(--yel); font: 700 15px var(--f-body); }
+body.touch .time { font-size: 18px; margin-top: 2px; }
+body.touch .role { font-size: 12px; padding: 2px 8px 2px 4px; } body.touch .role svg { width: 16px; height: 16px; }
+body.touch .heat span { width: 18px; height: 18px; }
+body.touch .radio { top: 54px; font-size: 12px; padding: 5px 10px; }
+@media (orientation: portrait) {
+  /* 縦持ちは上の真ん中が狭いので、速度の下（左）に手配度と逮捕ゲージを置く */
+  body.touch .hud-top { display: block; top: 192px; left: max(10px, env(safe-area-inset-left)); width: 130px; transform: none; right: auto; }
+  body.touch .hud-top .heat { justify-content: flex-start; gap: 2px; }
+  body.touch .hud-top .bust span { text-align: left; }
+  body.touch .radio { top: 96px; }
+}
+@media (max-height: 380px) { .roles .btn svg { width: 18px; height: 18px; } }
+
+/* スマホの遊び方: キーボードの表・パッド・全体図を省いて一画面に収める */
+@media (max-width: 760px), (max-height: 500px) {
+  #howto .howto-grid > div > h3, #howto .keys, #howto .pad:first-of-type, #howto #fullMap { display: none; }
+  #howto .howto-list { font-size: 13px; line-height: 1.5; gap: 6px; margin: 6px 0; }
+  #howto .pad { font-size: 11.5px; margin: 4px 0; }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  #howto .howto-grid { grid-template-columns: 1fr; gap: 4px; }
+  #howto .panel { padding-top: 10px; padding-bottom: 8px; }
+  #howto .pad { font-size: 10.5px; margin: 2px 0; }
+  #howto .howto-list { display: block; column-count: 2; column-gap: 22px; font-size: 12px; line-height: 1.42; margin: 0; }
+  #howto .howto-list li { break-inside: avoid; margin-bottom: 5px; }
+  #howto .panel-head { margin-bottom: 4px; }
+}
+/* 背の低い PC 画面の遊び方: 詰めて一画面に */
+@media (max-height: 620px) and (min-width: 761px) {
+  #howto .howto-list { font-size: 12.5px; line-height: 1.45; gap: 5px; margin: 6px 0; }
+  #howto .keys td { padding-top: 2px; padding-bottom: 2px; font-size: 12px; }
+  #howto kbd { padding: 1px 5px; font-size: 10px; }
+  #howto .pad { font-size: 11px; margin: 4px 0; }
+  #howto .pad:first-of-type { display: none; }
+  #howto .keys tr:nth-child(6) { display: none; }
+  #howto #fullMap { max-height: 420px; width: auto; }
+}

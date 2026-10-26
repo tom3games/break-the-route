@@ -26,12 +26,13 @@ test('軽い接触と高速の激突でダメージが大きく違う', () => {
   assert.ok(Math.abs(slow.vx) < 7, `遅い方も跳ね返っている vx=${slow.vx}`)
   const lossSlow = 1 - slow.dmg.body, lossFast = 1 - fast.dmg.body
   assert.ok(lossSlow < 0.03, `7m/s の損傷 ${lossSlow}`)
-  assert.ok(lossFast > 0.15, `35m/s の損傷 ${lossFast}`)
+  // 2026-10-26 耐久を約3倍に（本人「耐久値上げて」）。それでも速い衝突ははっきり傷む
+  assert.ok(lossFast > 0.05 && lossFast > lossSlow * 5, `35m/s の損傷 ${lossFast}`)
 })
 
 test('正面衝突はエンジンと冷却を傷める', () => {
   const c = hitWallAt(28)
-  assert.ok(c.dmg.engine < 0.9 && c.dmg.cool < 0.9, JSON.stringify(c.dmg))
+  assert.ok(c.dmg.engine < 0.98 && c.dmg.cool < 0.98 && c.dmg.susp === 1, JSON.stringify(c.dmg))
 })
 
 test('損傷で最高速が落ちる', () => {

@@ -33,7 +33,7 @@ export function planRoute(world, rng, bold = 0.5, force = null) {
 }
 
 // 曲がり角の速度を付けながら細かく刻む
-function densify(pts, step) {
+export function densify(pts, step) {
   const out = []
   for (let i = 0; i < pts.length - 1; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[i + 1]

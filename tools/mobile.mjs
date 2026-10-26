@@ -41,10 +41,11 @@ for (const engine of process.argv.includes('--all') ? [webkit, chromium] : [webk
     const el = document.querySelector(sel); const r = el.getBoundingClientRect()
     el.dispatchEvent(new PointerEvent(type, { pointerId: sel.length + (type === 'pointermove' ? 0 : 0), pointerType: 'touch', bubbles: true, clientX: x ?? r.left + r.width / 2, clientY: y ?? r.top + r.height / 2 }))
   }, [sel, type, x, y])
+  const p0 = await p.evaluate(() => ({ x: window.__btr.me.x, z: window.__btr.me.z }))
   await press('[data-k=gas]', 'pointerdown')
   await p.waitForTimeout(2500)
-  const z1 = await p.evaluate(() => window.__btr.me.z)
-  ok(z1 > 30, tag + ' アクセルで進む', 'z=' + z1.toFixed(1))
+  const moved = await p.evaluate(p0 => Math.hypot(window.__btr.me.x - p0.x, window.__btr.me.z - p0.z), p0)
+  ok(moved > 25, tag + ' アクセルで進む', moved.toFixed(1) + 'm')
   // 開けた直線で試す（スタート直後は CPU やジャンプ台に当たって向きが変わる）
   await p.evaluate(() => window.__btr.teleport(0, 420, 0, 20))
   await p.waitForTimeout(150)
@@ -58,7 +59,7 @@ for (const engine of process.argv.includes('--all') ? [webkit, chromium] : [webk
   await press('[data-k=gas]', 'pointerup')
   // 操作部品が画面からはみ出していないか・重なっていないか
   const lay = await p.evaluate(() => {
-    const rs = ['[data-k=left]', '[data-k=right]', '[data-k=gas]', '[data-k=brake]', '[data-k=boost]', '[data-k=drift]', '[data-k=pause]', '[data-k=cam]', '[data-k=respawn]', '#miniMap', '.hud-br', '.hud-tl'].map(s => [s, document.querySelector(s).getBoundingClientRect()])
+    const rs = ['[data-k=left]', '[data-k=right]', '[data-k=gas]', '[data-k=brake]', '[data-k=boost]', '[data-k=drift]', '[data-k=pause]', '[data-k=cam]', '[data-k=respawn]', '#miniMap', '.hud-br', '.hud-tl', '.hud-top'].map(s => [s, document.querySelector(s).getBoundingClientRect()])
     const out = rs.filter(([, r]) => r.width && (r.left < -1 || r.top < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1)).map(([s]) => s)
     const ov = []
     for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) { const a = rs[i][1], c = rs[j][1]; if (a.width && c.width && a.left < c.right - 2 && c.left < a.right - 2 && a.top < c.bottom - 2 && c.top < a.bottom - 2) ov.push(rs[i][0] + '/' + rs[j][0]) }

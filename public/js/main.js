@@ -1,9 +1,10 @@
-// 画面の入口。タイトル（裏でCPUのデモ走行）→ ガレージ → レース → 結果。
-// 物理とレース判定は shared/ のものをそのまま使い、ここは描画・入力・音・画面遷移だけを持つ。
+// 画面の入口。タイトル（裏でCPUの追跡のデモ）→ ガレージ → 警察と犯人 → 結果。
+// 物理と追跡の判定は shared/ のものをそのまま使い、ここは描画・入力・音・画面遷移だけを持つ。
 import * as THREE from 'three'
-import { GAME, CARS, UPGRADES, PAINTS, DESTRUCT, buildStats } from '../shared/config.js'
-import { createWorld, FALL_SEC, terrain, gateAt, totalGates } from '../shared/track.js'
-import { Race, mulberry } from '../shared/race.js'
+import { GAME, CARS, UPGRADES, PAINTS, DESTRUCT, CHASE, buildStats } from '../shared/config.js'
+import { createWorld, FALL_SEC, terrain } from '../shared/track.js'
+import { Chase, mulberry, COP_PAINT, ROBBER_PAINT, blast } from '../shared/chase.js'
+import { createNav } from '../shared/citynav.js'
 import { speedOf } from '../shared/physics.js'
 import { createDriver, drive, planRoute } from '../shared/ai.js'
 import { buildScene, propGeometry } from './scene.js'
@@ -13,7 +14,7 @@ import { Audio } from './audio.js'
 import { Input } from './input.js'
 import { t, applyI18n, setLang, getLang, placeText } from './i18n.js'
 import { loadProfile, saveProfile, buyUpgrade, sellUpgrade } from './save.js'
-import { HUD, drawFullMap } from './hud.js'
+import { HUD, drawFullMap, ICON_COP, ICON_ROBBER } from './hud.js'
 import { loadSky, makeComposer, setAniso } from './look.js'
 import { Q, LOW } from './quality.js'
 import { Online } from './online.js'
@@ -61,7 +62,9 @@ loadSky(renderer, scene, sun, dir => {
 const camera = new THREE.PerspectiveCamera(64, 1, 0.3, 2400)
 
 // ステージ（touge = 峠と峡谷 / city = 湾岸シティ）。選んだものは保存してある
-let world = createWorld(loadProfile().stage === 'city' ? 'city' : 'touge')
+// 警察と犯人は街（湾岸シティ）で遊ぶ
+let world = createWorld('city')
+let nav = createNav(world)
 let built = buildScene(scene, world)
 const fx = new FX(scene, world)
 const audio = new Audio()
@@ -69,32 +72,16 @@ const input = new Input()
 const hud = new HUD(world)
 hud.onBeep = () => audio.beep(false)
 
-// ---------------------------------------------------------------- 道案内
-// 車の上の矢印: 今いる区間のルート（A〜E のうち一番近い道）を 30m 先まで辿った点を指す。
-// 近道を選んでも、その道に沿って次のゲートへ案内する
-const makeGuidePaths = () => world.routes.map((opts, si) => opts.map(o => {
-  const out = []
-  for (let i = 0; i < o.pts.length - 1; i++) {
-    const [ax, az] = o.pts[i], [bx, bz] = o.pts[i + 1]
-    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 4))
-    for (let k = 0; k < n; k++) out.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n])
-  }
-  const g = world.gates[si].respawn
-  out.push([g.x, g.z])
-  return out
-}))
-let guidePaths = makeGuidePaths()
-
 // ステージを切り替える（コースの見た目・壊せる物・案内を作り直す）
 function loadStage(id) {
   if (world.stage === id) return
   scene.remove(built.root)
   built.root.traverse(o => { if (o.geometry) o.geometry.dispose() })
   world = createWorld(id)
+  nav = createNav(world)
   built = buildScene(scene, world)
   fx.world = world
   hud.world = world
-  guidePaths = makeGuidePaths()
   placePickups()
   if (railIM) { scene.remove(railIM); railIM.dispose(); railIM = null; railIndex.clear() }
   placeProps()
@@ -142,53 +129,41 @@ const beacon = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 160, 20, 1, t
   new THREE.MeshBasicMaterial({ color: 0xff8a1f, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }))
 scene.add(beacon)
 
-// 近道の入口に近づいたら教える（前方 90m 以内、次のゲートへ向かう区間のもの）
-let hintCool = 0
-function updateShortcutHint() {
-  if (!me || mode !== 'race' || !race || race.phase !== 'racing') return
-  hintCool -= 1 / 60
-  if (hintCool > 0) return
-  const fx_ = Math.sin(me.yaw), fz = Math.cos(me.yaw)
-  for (const sc of world.shortcuts || []) {
-    const dx = sc.entry[0] - me.x, dz = sc.entry[1] - me.z, d = Math.hypot(dx, dz)
-    if (d > 90 || d < 12) continue
-    if ((dx * fx_ + dz * fz) / d < 0.3) continue
-    // 近道の出口が、今の位置より次のゲートに近いときだけ（逆走の案内をしない）
-    const g = gateAt(world, Math.min(race.entry(myId).cp, totalGates(world) - 1))
-    if (Math.hypot(sc.exit[0] - g.cx, sc.exit[1] - g.cz) > Math.hypot(me.x - g.cx, me.z - g.cz)) continue
-    hud.message(t('shortcutHint'), Math.round(d) + 'm', 2.2)
-    hintCool = 8
-    break
-  }
+// 目標: 犯人には開いた隠れ家、警察には犯人（見えていれば本当の位置、見失っていれば最後の目撃）
+function chaseTarget() {
+  if (!me || !race || race.phase === 'done') return null
+  const e = race.entry(myId)
+  if (!e) return null
+  if (e.role === 'robber') return race.hideout.open && !e.escaped && !e.arrested ? { x: race.hideout.x, z: race.hideout.z, color: 0x36e07a, live: false } : null
+  const k = hud.known(race, me)
+  return k ? { x: k.x, z: k.z, color: k.live ? 0xff3355 : 0xff8a1f, live: k.live } : null
 }
-
+let guidePath = null, guidePathAt = 0
 function updateGuide(now) {
-  const e = me && race ? race.entry(myId) : null
-  const on = !!(e && mode === 'race' && !e.finished && camMode !== 2)
-  guide.visible = on
-  beacon.visible = !!(e && mode === 'race' && !e.finished)
-  if (!e || e.finished) return
-  const cpi = Math.min(e.cp, totalGates(world) - 1)
-  const si = cpi % world.gates.length
-  const g = gateAt(world, cpi)
-  beacon.position.set(g.cx, world.groundAt(g.cx, g.cz, 60).h, g.cz)
-  beacon.material.color.setHex(cpi === totalGates(world) - 1 ? 0x7dffb0 : 0xff8a1f)
+  const tg = mode === 'race' ? chaseTarget() : null
+  guide.visible = !!tg && camMode !== 2
+  const d = tg ? Math.hypot(tg.x - me.x, tg.z - me.z) : 0
+  beacon.visible = !!tg && !(tg.live && d < 70)
+  if (!tg) return
+  beacon.position.set(tg.x, world.groundAt(tg.x, tg.z, 60).h, tg.z)
+  beacon.material.color.setHex(tg.color)
   beacon.material.opacity = 0.22 + Math.sin(now / 300) * 0.08
-  if (!on) return
-  // 一番近い道の点から 30m 先
-  let best = null, bd = 1e9
-  for (const path of guidePaths[si]) for (let i = 0; i < path.length; i++) {
-    const d = (path[i][0] - me.x) ** 2 + (path[i][1] - me.z) ** 2
-    if (d < bd) { bd = d; best = { path, i } }
+  if (!guide.visible) return
+  // 遠いときは道なりの次の交差点を指す（ビル越しにまっすぐ指さない）
+  let px = tg.x, pz = tg.z
+  if (d > 60 && nav) {
+    if (!guidePath || now - guidePathAt > 500) { guidePath = nav.path(nav.entry(me.x, me.z, me.yaw), nav.nearest(tg.x, tg.z)); guidePathAt = now }
+    const n = guidePath.find(q => Math.hypot(q.x - me.x, q.z - me.z) > 14)
+    if (n) { px = n.x; pz = n.z }
   }
-  const tgt = best.path[Math.min(best.path.length - 1, best.i + 8)]
-  const yaw = Math.atan2(tgt[0] - me.x, tgt[1] - me.z)
+  const yaw = Math.atan2(px - me.x, pz - me.z)
   const m = models.get(myId)
   const p = m ? m.group.position : me
   // 車の少し前・上。手前（カメラ側）へ起こして、平たく潰れて見えないようにする
   guide.position.set(p.x + Math.sin(me.yaw) * 1.2, p.y + 1.75 + Math.sin(now / 260) * 0.06, p.z + Math.cos(me.yaw) * 1.2)
   guide.rotation.set(0, yaw, 0, 'YXZ')
   guide.rotateX(-0.55)
+  guide.children[1].material.color.setHex(tg.color === 0x36e07a ? 0x36e07a : 0xffc21a)
 }
 
 // 壊せる物のメッシュ
@@ -264,7 +239,8 @@ function buildTrafficPool() {
   for (const list of trafficModels.values()) for (const m of list) { scene.remove(m.group); m.dispose() }
   trafficModels.clear()
   if (!race || !race.traffic) return
-  const n = LOW ? { sedan: 12, van: 6, taxi: 4 } : { sedan: 24, van: 12, taxi: 8 }
+  // 2026-10-26「一般車が重すぎる」: 見た目を割り当てる台数を減らした（スマホ 22→12、PC 44→26）
+  const n = LOW ? { sedan: 7, van: 3, taxi: 2 } : { sedan: 14, van: 7, taxi: 5 }
   for (const [kind, k] of Object.entries(n)) {
     const list = []
     for (let i = 0; i < k; i++) { const m = new ProcCar(kind, 0xffffff); m.group.visible = false; scene.add(m.group); list.push(m) }
@@ -274,7 +250,11 @@ function buildTrafficPool() {
 const _tcol = new THREE.Color()
 function drawTraffic(dt) {
   const cx = camera.position.x, cz = camera.position.z
-  const near = race.traffic.cars.map(c => [c, (c.x - cx) ** 2 + (c.z - cz) ** 2]).filter(([, d]) => d < 300 * 300).sort((a, b) => a[1] - b[1])
+  // 描くのはカメラから 220m（スマホ 170m）以内だけ
+  const R2 = LOW ? 170 * 170 : 220 * 220
+  const near = []
+  for (const c of race.traffic.cars) { const d = (c.x - cx) ** 2 + (c.z - cz) ** 2; if (d < R2) near.push([c, d]) }
+  near.sort((a, b) => a[1] - b[1])
   const used = {}
   for (const [c] of near) {
     const list = trafficModels.get(c.kind)
@@ -297,6 +277,7 @@ let doneAt = null
 let lastFrameInp = null
 let msgTimer = 0
 let demoSwitch = 0
+let copLastRadio = -1
 
 const cam = { pos: new THREE.Vector3(0, 10, -20), look: new THREE.Vector3(), fov: 64 }
 
@@ -309,57 +290,211 @@ function startRace({ demo = false, view = null } = {}) {
   seenBroken = new Set()
   placeProps()
 
-  race = new Race(world, { seed: (Math.random() * 1e9) | 0 })
+  race = new Chase(world, { seed: view && view.seed != null ? view.seed : (Math.random() * 1e9) | 0, ...(view && view.timeLimit ? { timeLimit: view.timeLimit } : {}) })
+  for (const g of built.gates) g.grp.visible = false // レースのゲートは使わない
   me = null
   autopilot = null
   onlineRace = !!view
   myId = 'me'
+  heli.visible = false
+  const pc = profile.cars[profile.car]
   if (view) {
-    // オンライン: 並び順（スタート位置）はサーバーと同じ。自分だけここで動かし、他は通信で動かす
+    // オンライン: 役とスタート位置・隠れ家はサーバーと同じ。自分だけここで動かし、他は通信で動かす
     race.remoteJudge = true
     myId = online.you
-    const pc = profile.cars[profile.car]
+    if (view.hideout) race.hideout = { ...view.hideout }
     for (const en of view.entries) {
       const isMe = en.id === myId
-      const car = race.addHuman({ id: en.id, name: en.name, carId: isMe ? profile.car : en.carId, levels: isMe ? pc.levels : en.levels, paint: isMe ? pc.paint : en.paint, remote: !isMe })
+      const car = race.addHuman({ id: en.id, name: en.name, role: en.role, carId: isMe ? profile.car : en.carId, levels: isMe ? pc.levels : en.levels, paint: isMe ? pc.paint : en.paint, remote: !isMe })
       const e = race.entry(en.id)
       e.bot = en.bot
+      if (en.spawn) { Object.assign(car, { x: en.spawn.x, z: en.spawn.z, yaw: en.spawn.yaw }); car.respawnPoint = { ...en.spawn }; e.spawn = en.spawn; e.px = car.x; e.pz = car.z }
       if (isMe) me = car
     }
     for (const [id, at] of view.destroyed) { world.destroyed.add(id); world.destroyedAt.set(id, at) }
     race.t = view.rt
     world.time = view.rt
     if (view.phase !== 'countdown') race.phase = view.phase
+    if (view.chase) applyChaseSummary(view.chase)
     // 再接続: サーバーが最後に受け付けた位置から続ける
     if (me && view.you && view.rt > 0) {
-      const y = view.you, e = race.entry(myId)
+      const y = view.you
       Object.assign(me, { x: y.x, y: y.y, z: y.z, yaw: y.yaw })
-      e.cp = y.cp; e.px = y.x; e.pz = y.z
+      const e = race.entry(myId); e.px = y.x; e.pz = y.z
       if (y.respawn) me.respawnPoint = { ...y.respawn }
       if (y.dmg) Object.assign(me.dmg, y.dmg)
     }
   } else if (!demo) {
-    const pc = profile.cars[profile.car]
-    me = race.addHuman({ id: 'me', name: profile.name || t('you'), carId: profile.car, levels: pc.levels, paint: pc.paint })
-    race.addBots(profile.cpu)
-  } else race.addBots(7)
-  // CPU の塗装はばらす
-  const rng = mulberry(7)
+    // オフライン: 選んだ役で。警察の数は CPU の設定（1〜6）
+    const role = profile.role === 'cop' ? 'cop' : 'robber'
+    const nCops = Math.max(1, Math.min(6, profile.cpu || 3))
+    const mine = { id: 'me', name: profile.name || t('you'), carId: profile.car, levels: pc.levels, paint: role === 'robber' ? pc.paint : null, role }
+    if (role === 'robber') { me = race.addHuman(mine); race.addBots(nCops, 'cop') }
+    else { race.addBots(1, 'robber'); me = race.addHuman(mine); race.addBots(nCops - 1, 'cop') }
+  } else { race.addBots(1, 'robber'); race.addBots(3, 'cop') }
   for (const e of race.entries) {
-    const paint = e.car.paint ?? PAINTS[(Math.floor(rng() * PAINTS.length) + race.entries.indexOf(e)) % PAINTS.length]
-    const m = new CarModel(e.car.carId, paint)
+    const m = makeModel(e, e.car.paint ?? (e.role === 'cop' ? COP_PAINT : ROBBER_PAINT))
     scene.add(m.group)
     models.set(e.id, m)
   }
   // 一般車（街だけ）。軽い手続きの車で描く
   buildTrafficPool()
-  follow = me || race.entries[0].car
+  follow = me || (race.robbers[0] || race.entries[0]).car
   doneAt = null
+  copLastRadio = -1
   paused = false
   hud.setup(race, me)
   // カメラを車の後ろに置き直す
   snapCamera()
 }
+
+// 車の見た目。警察は屋根に赤と青の回転灯をのせる
+function makeModel(e, paint) {
+  const m = new CarModel(e.car.carId, paint)
+  if (e.role === 'cop') addPoliceLights(m)
+  return m
+}
+const lightGeo = new THREE.BoxGeometry(0.42, 0.16, 0.26)
+const barGeo = new THREE.BoxGeometry(1.1, 0.08, 0.32)
+const barMat = new THREE.MeshStandardMaterial({ color: 0x1a1c20, roughness: 0.5 })
+function addPoliceLights(m) {
+  m.group.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(m.group)
+  const top = box.max.y - m.group.position.y
+  const g = new THREE.Group()
+  g.position.set(0, top + 0.02, -0.1)
+  const red = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff1a1a, emissiveIntensity: 2.5, roughness: 0.3 })
+  const blue = new THREE.MeshStandardMaterial({ color: 0x000a40, emissive: 0x2a6bff, emissiveIntensity: 2.5, roughness: 0.3 })
+  const bar = new THREE.Mesh(barGeo, barMat)
+  const l = new THREE.Mesh(lightGeo, red); l.position.set(-0.3, 0.1, 0)
+  const r = new THREE.Mesh(lightGeo, blue); r.position.set(0.3, 0.1, 0)
+  g.add(bar, l, r)
+  m.group.add(g)
+  m.siren = { red, blue, phase: Math.random() * 6 }
+}
+// 回転灯の点滅（赤と青が交互に、速く2回ずつ）
+function updateSirens(now) {
+  for (const [id, m] of models) {
+    if (!m.siren) continue
+    const k = ((now / 1000 * 2.4 + m.siren.phase) % 1)
+    const flash = (a, b) => (k > a && k < a + 0.09) || (k > b && k < b + 0.09)
+    m.siren.red.emissiveIntensity = flash(0.0, 0.16) ? 6 : 0.4
+    m.siren.blue.emissiveIntensity = flash(0.5, 0.66) ? 6 : 0.4
+  }
+}
+
+// ヘリ（手配度3から）: 犯人の上を回りながら、白い光の筒で照らす
+const heli = new THREE.Group()
+{
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(1.1, 3.2, 4, 10).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1d2a44, roughness: 0.4, metalness: 0.3 }))
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 4.5), body.material); tail.position.set(0, 0.3, -3.8)
+  const rotor = new THREE.Mesh(new THREE.BoxGeometry(9, 0.08, 0.35), new THREE.MeshStandardMaterial({ color: 0x111111 })); rotor.position.y = 1.4
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(9, 60, 24, 1, true).translate(0, -30, 0),
+    new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }))
+  heli.add(body, tail, rotor, beam)
+  heli.userData = { rotor, beam }
+  heli.visible = false
+  scene.add(heli)
+}
+function updateHeli(dt, now) {
+  const H = race && race.heli
+  const rob = race && (race.entry(H && H.target) || race.robbers.find(r => !r.left && !r.arrested && !r.escaped) || race.robbers[0])
+  heli.visible = !!(H && H.active && rob && race.phase !== 'countdown')
+  if (!heli.visible) { heli.position.y = 0; return }
+  const c = rob.car
+  const gy = world.groundAt(H.x, H.z, 60).h
+  _hv.set(H.x, gy + CHASE.heliAlt, H.z)
+  if (heli.position.y < 1) heli.position.copy(_hv).y += 30
+  heli.position.lerp(_hv, 1 - Math.exp(-dt * 3))
+  heli.lookAt(c.x, heli.position.y, c.z)
+  heli.userData.rotor.rotation.y += dt * 30
+  // 光の筒は犯人へ向ける
+  const beam = heli.userData.beam
+  beam.lookAt(c.x, c.y, c.z); beam.rotateX(-Math.PI / 2)
+  beam.scale.y = Math.max(0.5, heli.position.distanceTo(_v.set(c.x, c.y, c.z)) / 60)
+}
+// ランチャーの予告（地面の赤い円と照準）とミサイル
+const strikeFx = []
+{
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide, fog: false })
+  const fillMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide, fog: false })
+  const missileMat = new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0xff7a1a, emissiveIntensity: 2 })
+  for (let i = 0; i < 6; i++) {
+    const g = new THREE.Group()
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.92, 1, 40).rotateX(-Math.PI / 2), ringMat)
+    const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 40).rotateX(-Math.PI / 2), fillMat)
+    const cross = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.08).rotateX(-Math.PI / 2), ringMat)
+    const cross2 = cross.clone(); cross2.rotation.y = Math.PI / 2
+    g.add(ring, fill, cross, cross2)
+    g.renderOrder = 5
+    const missile = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 1.6, 8).rotateX(Math.PI / 2), missileMat)
+    g.visible = false; missile.visible = false
+    scene.add(g, missile)
+    strikeFx.push({ g, fill, missile })
+  }
+}
+function updateStrikes(now) {
+  const list = race && race.phase === 'racing' ? (race.strikes || []).filter(s => !s.done) : []
+  strikeFx.forEach((f, i) => {
+    const s = list[i]
+    f.g.visible = !!s; f.missile.visible = false
+    if (!s) return
+    const left = s.at - race.t
+    const gy = world.groundAt(s.x, s.z, 60).h
+    f.g.position.set(s.x, gy + 0.25, s.z)
+    f.g.scale.setScalar(s.r * (1 + Math.sin(now / 70) * 0.03))
+    f.fill.scale.setScalar(Math.max(0.05, 1 - left / CHASE.strikeWarn))
+    // 最後の 0.6 秒はミサイルが飛んでくる
+    if (left < 0.6 && heli.visible) {
+      const k = 1 - left / 0.6
+      f.missile.visible = true
+      f.missile.position.lerpVectors(heli.position, _v.set(s.x, gy, s.z), k)
+      f.missile.lookAt(s.x, gy, s.z)
+      if (Math.random() < 0.7) fx.smoke(f.missile.position.x, f.missile.position.y, f.missile.position.z, { dark: 0.7, size: 1.2, life: 0.8, vy: 0.3, a: 0.5 })
+    }
+  })
+}
+const _hv = new THREE.Vector3()
+
+// オンライン: サーバーの判定（逮捕ゲージ・手配度・隠れ家・結末）を写す
+function applyChaseSummary(ch) {
+  if (!race || !ch) return
+  if (ch.heat !== race.heat) { race.heat = ch.heat; race.events.push({ t: 'heat', heat: ch.heat }) }
+  if (ch.hideout && ch.hideout.open && !race.hideout.open) { race.hideout.open = true; race.events.push({ t: 'hideout', area: ch.hideout.area }) }
+  race.pingUntil = ch.pingUntil
+  for (const r of ch.robbers || []) {
+    const e = race.entry(r.id)
+    if (!e) continue
+    e.bust = r.bust
+    if (r.seen && (!e.lastSeen || r.seen.at !== e.lastSeen.at)) e.lastSeen = r.seen
+    if (r.arrested && !e.arrested) { e.arrested = true; race.events.push({ t: 'bust', id: e.id }) }
+    if (r.escaped && !e.escaped) { e.escaped = true; race.events.push({ t: 'escape', id: e.id }) }
+  }
+  // ヘリ・予告・着弾・修理（サーバーが決めたものを写す）
+  if (ch.heli) { if (ch.heli.active && !race.heli.active) race.events.push({ t: 'heli' }); Object.assign(race.heli, ch.heli) }
+  if (ch.strikes) {
+    for (const s of ch.strikes) if (!seenStrikes.has(s.id)) { seenStrikes.add(s.id); race.events.push({ t: 'strikeWarn', ...s }) }
+    race.strikes = ch.strikes
+  }
+  for (const b of ch.blasts || []) {
+    if (seenStrikes.has('b' + b.id)) continue
+    seenStrikes.add('b' + b.id)
+    if (me && b.hit.includes(myId)) blast(me, { x: b.x, z: b.z, r: CHASE.strikeRadius })
+    race.events.push({ t: 'blast', ...b })
+  }
+  if (ch.reps) for (const [id, [rep, cd, n, seen]] of Object.entries(ch.reps)) {
+    const e = race.entry(id)
+    if (!e) continue
+    e.rep = rep; e.repairCd = cd; e.repSeen = !!seen
+    if (n > (e.repairs || 0)) {
+      e.repairs = n
+      if (e.car === me) { for (const k in me.dmg) me.dmg[k] = 1; me.dents.length = 0; me.boost = 1 }
+      race.events.push({ t: 'repaired', id, n, lost: e.role === 'robber' })
+    }
+  }
+  if (ch.outcome && !race.outcome) { race.outcome = ch.outcome; race.phase = 'done' }
+}
+const seenStrikes = new Set()
 
 function snapCamera() {
   const c = follow
@@ -383,15 +518,17 @@ function toTitle() {
   show('title')
 }
 
-function beginPlayerRace() {
+function beginPlayerRace(role = null) {
   audio.start()
-  loadStage(profile.stage)
+  if (role) { profile.role = role; saveProfile(profile) }
+  loadStage('city')
   profile.name = ($('nameInput').value || '').trim().slice(0, 12)
   saveProfile(profile)
   mode = 'race'
   startRace()
   show(null)
   hud.hint(touchMode ? t('hintTouch') : t('hintStart'), 6)
+  setTimeout(() => { if (mode === 'race' && me) hud.radio(t(me.role === 'cop' ? 'startCop' : 'startRobber'), 4) }, 400)
 }
 
 // スマホ: タッチ操作。タッチが主の端末か、画面を指で触ったらタッチ用の表示にする
@@ -414,7 +551,9 @@ document.addEventListener('touchmove', e => { if (!e.target.closest('.panel')) e
 // タイトル
 $('nameInput').value = profile.name
 $('nameInput').addEventListener('change', () => { profile.name = $('nameInput').value.trim().slice(0, 12); saveProfile(profile) })
-for (let i = 0; i <= 7; i++) { const o = document.createElement('option'); o.value = i; o.textContent = i; $('cpuSelect').appendChild(o) }
+// 警察の数（1〜6）。自分が警察のときは自分を含む数
+for (let i = 1; i <= 6; i++) { const o = document.createElement('option'); o.value = i; o.textContent = i; $('cpuSelect').appendChild(o) }
+if (!(profile.cpu >= 1 && profile.cpu <= 6)) profile.cpu = 3
 $('cpuSelect').value = profile.cpu
 $('cpuSelect').addEventListener('change', () => { profile.cpu = Number($('cpuSelect').value); saveProfile(profile) })
 function renderCarPick() {
@@ -442,7 +581,8 @@ function renderStagePick() {
   }
 }
 renderStagePick()
-$('btnOffline').onclick = beginPlayerRace
+$('btnOffline').onclick = () => beginPlayerRace('robber')
+$('btnOfflineCop').onclick = () => beginPlayerRace('cop')
 $('btnGarage').onclick = () => { audio.start(); audio.ui(); returnTo = 'title'; show('garage') }
 $('btnHowto').onclick = () => { audio.start(); audio.ui(); returnTo = 'title'; show('howto') }
 $('btnLang').onclick = () => { setLang(getLang() === 'ja' ? 'en' : 'ja'); refreshTexts() }
@@ -479,7 +619,7 @@ input.onKey = code => {
 $('btnAgain').onclick = () => {
   audio.ui()
   if (onlineRace && online && online.room) { if (online.room.hostId === online.you) online.rematch(Number($('cpuOnline').value), profile.stage); return }
-  beginPlayerRace()
+  beginPlayerRace(profile.role)
 }
 $('btnRGarage').onclick = () => {
   audio.ui()
@@ -488,27 +628,33 @@ $('btnRGarage').onclick = () => {
 }
 $('btnRTitle').onclick = () => { audio.ui(); if (onlineRace && online) online.leave(); toTitle() }
 
-function showResults(list = null) {
+function showResults(data = null) {
   mode = 'results'
-  const res = list || race.results()
+  const res = Array.isArray(data) ? data : data && data.list ? data.list : race.results()
+  const outcome = (data && data.outcome) || race.outcome || null
   const mine = res.find(r => r.id === myId)
-  if (mine) { profile.credits += mine.credits; profile.races++; if (mine.finished && (!profile.best || mine.time < profile.best)) profile.best = mine.time; saveProfile(profile) }
+  if (mine) { profile.credits += mine.credits; profile.races++; if (mine.won) profile.wins = (profile.wins || 0) + 1; saveProfile(profile) }
   const body = $('rBody'); body.innerHTML = ''
+  const reasonKey = { bust: 'winByBust', wreck: 'winByWreck', time: 'winByTime', hideout: 'winByHideout', left: 'winByLeft' }
   res.forEach((r, i) => {
     const tr = document.createElement('tr')
-    if (r.id === myId) tr.className = 'me'
-    const st = r.finished ? fmtTime(r.time) : r.left ? t('left') : t('dnf')
-    tr.innerHTML = `<td class="n">${r.place}</td><td><b></b> <span class="s">${CARS[r.carId].name}</span></td><td class="s">${t('breaks')} ${r.breaks} / ${t('air')} ${r.maxAir}s${r.takedowns ? ' / TAKEDOWN ' + r.takedowns : ''} / ${t('body')} ${r.body}%</td><td class="t">${st}</td>`
+    tr.className = (r.id === myId ? 'me ' : '') + (r.won ? 'won' : '')
+    const st = r.left ? t('left') : r.role === 'robber' ? (r.arrested ? t('busted') : r.escaped ? t('escaped') : t('onRun')) : (r.arrests ? `${t('arrests')} ${r.arrests}` : '')
+    const extra = [r.takedowns ? 'TAKEDOWN ' + r.takedowns : '', `${t('breaks')} ${r.breaks}`, `${t('body')} ${r.body}%`].filter(Boolean).join(' / ')
+    tr.innerHTML = `<td class="n role-${r.role}">${r.role === 'cop' ? ICON_COP : ICON_ROBBER}</td><td><b></b> <span class="s">${r.role === 'cop' ? t('roleCop') : t('roleRobber')}</span></td><td class="s">${extra}</td><td class="t">${st}</td>`
     tr.querySelector('b').textContent = r.name
     body.appendChild(tr)
     setTimeout(() => tr.classList.add('in'), 250 + i * 160)
   })
   const stamp = $('rStamp')
   stamp.classList.remove('show')
+  const copsWon = outcome ? outcome.winner === 'cop' : false
+  $('rTitle').textContent = outcome ? (copsWon ? t('copWin') : t('robberWin')) : t('results')
+  $('rReason').textContent = outcome ? `${t(reasonKey[outcome.reason] || 'winByTime')}　${fmtClock(outcome.t)}` : ''
   if (mine) {
-    stamp.textContent = mine.finished ? placeText(mine.place) : t('dnf')
-    stamp.style.color = mine.place === 1 && mine.finished ? 'var(--yel)' : mine.finished && mine.place <= 3 ? 'var(--fg)' : 'var(--hot)'
-    setTimeout(() => { stamp.classList.add('show'); if (mine.place === 1 && mine.finished) audio.fanfare(); else audio.beep(true) }, 250 + res.length * 160)
+    stamp.textContent = mine.role === 'robber' ? (mine.won ? t('msgEscaped') : t('msgCaught')) : (mine.won ? t('msgBusted') : t('msgLost'))
+    stamp.style.color = mine.won ? 'var(--yel)' : 'var(--hot)'
+    setTimeout(() => { stamp.classList.add('show'); if (mine.won) audio.fanfare(); else audio.beep(true) }, 250 + res.length * 160)
     $('rEarn').textContent = `${t('earned')} +${mine.credits}   ${t('credits')} ${profile.credits}`
   } else $('rEarn').textContent = ''
   // オンラインでは再戦はホストだけが押せる
@@ -519,6 +665,7 @@ function showResults(list = null) {
   applyI18n($('results'))
   show('results')
 }
+function fmtClock(s) { const m = Math.floor(s / 60), r = Math.floor(s - m * 60); return `${m}:${String(r).padStart(2, '0')}` }
 
 function fmtTime(s) {
   if (s == null) return '--:--.--'
@@ -781,7 +928,12 @@ function frame() {
     acc += dt
     const airborne = me ? !me.grounded : false
     let inp = me ? input.read(airborne) : null
-    if (me && autopilot) inp = drive(autopilot, world)
+    if (me && autopilot) {
+      // 検証用: 自車を CPU と同じ考え方で走らせる（犯人なら逃げる、警察なら追う）
+      autopilot.replan -= dt
+      if (autopilot.replan <= 0) { autopilot.replan = 0.5; const e = race.entry(myId); if (e.role === 'cop') race.planCop(e); else race.planRobber(e) }
+      inp = drive(autopilot, world, race.cars())
+    }
     if (inp && menuOpen) inp = { throttle: 0, brake: 0.3, steer: 0 }
     if (inp && wantRespawn) { inp.respawn = true; wantRespawn = false }
     let first = true
@@ -858,18 +1010,17 @@ function frame() {
       const st = race.standings()
       follow = st[Math.floor(Math.random() * Math.min(3, st.length))].car
     }
-    if (race.phase === 'done' && race.t - (race.firstFinish ?? race.t) > 4) startRace({ demo: true })
+    if (race.phase === 'done' && race.t - (race.outcome ? race.outcome.t : race.t) > 4) startRace({ demo: true })
+    if (race.t > 150) startRace({ demo: true })
   }
 
   updateCamera(dt)
   updateGuide(now)
   updatePickups(now)
-  updateShortcutHint()
+  updateSirens(now)
+  updateHeli(paused ? 0 : dt, now)
+  updateStrikes(now)
   fx.update(paused ? 0 : dt)
-
-  // 次のゲートを光らせる
-  const myEntry = me ? race.entry(myId) : null
-  built.gates.forEach((g, i) => { g.beam.material.opacity = myEntry && !myEntry.finished && i === myEntry.cp % world.gates.length ? 0.35 + Math.sin(now / 200) * 0.15 : 0 })
 
   // 影は車の周りだけ
   const f = follow || { x: 0, y: 0, z: 0 }
@@ -883,6 +1034,20 @@ function frame() {
     if (me.boosting && !wasBoosting) audio.boostStart()
     wasBoosting = me.boosting
   } else audio.drive({ active: false })
+  // サイレン: 近くの警察ほど大きく（自分が警察なら自分のも少し）
+  if (race && (mode === 'race' || mode === 'title') && race.phase !== 'countdown' && !paused) {
+    const f = me || follow
+    let near = 1e9
+    if (f) for (const e of race.cops) if (e.car !== f && !e.left) near = Math.min(near, Math.hypot(e.car.x - f.x, e.car.z - f.z))
+    let v = Math.max(0, 1 - near / 240)
+    if (me && me.role === 'cop') v = Math.max(v, 0.32)
+    if (mode === 'title') v *= 0.35
+    if (race.phase === 'done') v *= 0.5
+    audio.siren(v)
+    // ローター音: ヘリが近いほど大きく
+    const f2 = me || follow
+    audio.rotor(heli.visible && f2 ? Math.max(0, 1 - heli.position.distanceTo(_v.set(f2.x, f2.y, f2.z)) / 160) * (mode === 'title' ? 0.3 : 1) : 0)
+  } else { audio.siren(0); audio.rotor(0) }
   if (mode === 'race' && !paused) audio.tickMusic(dt, race.phase === 'racing' ? 1 : 0.4)
 
   if (mode === 'race' && race) {
@@ -903,20 +1068,68 @@ function frame() {
 }
 let wasBoosting = false
 
+// 無線の文言（英語のときは場所と方角も英語に）
+const AREA_EN = { 'ダウンタウン': 'downtown', '運河沿い': 'the canal', '北地区': 'the north', '南地区': 'the south', '北東地区': 'the northeast', '北西地区': 'the northwest', '南東地区': 'the southeast', '南西地区': 'the southwest' }
+const DIR_EN = { '北': 'north', '南': 'south', '東': 'east', '西': 'west' }
+const trArea = a => getLang() === 'ja' ? a : (AREA_EN[a] || a)
+const trDir = d => getLang() === 'ja' ? d : (DIR_EN[d] || d)
 function raceEvent(ev) {
+  if (ev.t === 'go' && me) audio.beep(true)
   if (!me) return
-  if (ev.t === 'go') audio.beep(true)
-  if (ev.t === 'takedown' && ev.id === myId) { audio.crash(1.2); hud.message('TAKEDOWN', race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
+  const myE = race.entry(myId)
+  const cop = myE && myE.role === 'cop'
+  if (ev.t === 'takedown') {
+    if (ev.id === myId) { audio.crash(1.2); hud.message(t('takedown'), race.entry(ev.victim)?.car.name || '', 1.3); hud.feed('TAKEDOWN', '+35% NITRO') }
+    else if (ev.victim === myId && ev.kind !== 'knock') fx.addShake(1)
+  }
   if (ev.t === 'pickup' && ev.id === myId) { hud.feed('NITRO', '+30%'); audio.cp() }
-  if (ev.t === 'nearmiss' && ev.id === myId) { hud.feed('NEAR MISS', '+8% NITRO'); if (ev.traffic) audio.horn() }
   if (ev.t === 'smash') {
     fx.sparks(ev.x, ev.y, ev.z, 20, null, 10); fx.flash(ev.x, ev.y + 0.3, ev.z)
-    const near = me ? Math.hypot(me.x - ev.x, me.z - ev.z) : 99
-    if (near < 80) audio.crash(Math.min(1.2, ev.rel / 25) * (1 - near / 80))
-    if (ev.id === myId) { hud.feed('CRASH', '+5% NITRO'); fx.addShake(0.4) }
+    const near = Math.hypot(me.x - ev.x, me.z - ev.z)
+    if (near < 80) audio.crash(Math.min(1.2, ev.rel / 25 + 0.3) * (1 - near / 80))
+    if (ev.id === myId) { hud.feed('CRASH', '+4% NITRO'); fx.addShake(0.35) }
   }
-  if (ev.id === myId && ev.t === 'cp') { audio.cp(); hud.message(ev.name, fmtTime(race.t), 1.1) }
-  if (ev.id === myId && ev.t === 'finish') { audio.fanfare(); hud.message(t('goal'), fmtTime(ev.time), 2.4) }
+  if (ev.t === 'ping' && cop) {
+    hud.radio((ev.heading ? t('radioSeen') : t('radioSeenStop')).replace('{area}', trArea(ev.area)).replace('{dir}', trDir(ev.heading)))
+    audio.radio()
+  }
+  if (ev.t === 'heat') {
+    hud.radio(ev.heat === CHASE.heli ? t('radioHeli') : t('radioHeat').replace('{n}', ev.heat), 2.6)
+    audio.radio()
+  }
+  if (ev.t === 'hideout' && !cop) { hud.radio(t('radioHideout').replace('{area}', trArea(ev.area)), 4); hud.message(t('toHideout'), trArea(ev.area), 2); audio.cp() }
+  if (ev.t === 'bust') {
+    const r = race.entry(ev.id)
+    if (r) { fx.flash(r.car.x, r.car.y + 1, r.car.z); for (let i = 0; i < 6; i++) fx.smoke(r.car.x, r.car.y + 0.5, r.car.z, { dark: 0.5, size: 2, life: 1.6, vy: 2, a: 0.5 }) }
+    if (ev.id === myId) { hud.message(t('msgCaught'), '', 2.6); audio.crash(1) }
+    else if (cop) { hud.message(t('msgBusted'), r ? r.car.name : '', 2.6); audio.fanfare() }
+  }
+  if (ev.t === 'heli') { hud.radio(cop ? t('radioHeliCop') : t('radioHeliRobber'), 3.2); audio.radio() }
+  if (ev.t === 'strikeWarn') {
+    const d = Math.hypot(ev.x - me.x, ev.z - me.z)
+    if (!cop && d < 60) { audio.lockon(); if (!race._warnedOnce) { race._warnedOnce = true; hud.message(t('msgMissile'), t('msgMissileSub'), 1.6) } }
+  }
+  if (ev.t === 'blast') {
+    const gy = world.groundAt(ev.x, ev.z, 60).h
+    fx.flash(ev.x, gy + 1, ev.z)
+    fx.sparks(ev.x, gy + 0.5, ev.z, 50, null, 18)
+    for (let i = 0; i < 12; i++) fx.smoke(ev.x + (Math.random() - 0.5) * 6, gy + 1, ev.z + (Math.random() - 0.5) * 6, { dark: 0.15, size: 4, life: 2.2, vy: 4, a: 0.75 })
+    const near = Math.hypot(me.x - ev.x, me.z - ev.z)
+    audio.explosion(Math.max(0.15, 1 - near / 200))
+    if (near < 60) fx.addShake(Math.min(1.6, 1.8 - near / 40))
+    if (ev.hit && ev.hit.includes(myId)) { hud.message(t('msgHitMissile'), '', 1.4); hud.flashDamage(0.3) }
+  }
+  if (ev.t === 'repaired') {
+    if (ev.id === myId) {
+      hud.message(t('msgRepaired'), ev.lost ? t('msgRepairedLost') : t('msgRepairedSub'), 2)
+      audio.cp(); audio.fanfare()
+      const m = models.get(myId); if (m) { m.resetParts(); m.updateParts(me.dmg) }
+    } else if (cop && ev.lost) { hud.radio(t('radioLost'), 3); audio.radio() }
+  }
+  if (ev.t === 'escape') {
+    if (ev.id === myId) { hud.message(t('msgEscaped'), ev.reason === 'hideout' ? t('winByHideout') : t('winByTime'), 2.6); audio.fanfare() }
+    else if (cop) hud.message(t('msgLost'), '', 2.6)
+  }
 }
 
 function lerpAngle(a, b, k) {
@@ -1070,13 +1283,9 @@ function ensureOnline() {
       for (const c of m.cars) {
         const e = race.entry(c.id)
         if (!e) continue
-        if (e.remote) { e.cp = c.cp; e.finished = !!c.f; e.time = c.ft; e.left = !!c.l; e.connected = !!c.c }
-        else {
-          if (c.cp > e.cp) e.cp = c.cp
-          if (c.f && !e.finished) { e.finished = true; race.events.push({ t: 'finish', id: e.id, time: c.ft }) }
-          if (c.f) e.time = c.ft
-        }
+        if (e.remote) { e.left = !!c.l; e.connected = !!c.c }
       }
+      if (m.ch) applyChaseSummary(m.ch)
       if (m.phase === 'done') race.phase = 'done'
     }
   })
@@ -1185,7 +1394,7 @@ setTimeout(() => loadCarModel(Q.carLite ? 'assets/models/car_lite.glb' : 'assets
     const old = models.get(e.id)
     const paint = old && old.paintColor ? old.paintColor.getHex() : e.car.paint
     if (old) { scene.remove(old.group); old.dispose() }
-    const m = new CarModel(e.car.carId, paint ?? 0xe8432e)
+    const m = makeModel(e, paint ?? 0xe8432e)
     scene.add(m.group)
     m.updateParts(e.car.dmg)
     models.set(e.id, m)
@@ -1200,6 +1409,13 @@ window.__btr = {
   get world() { return world }, get race() { return race }, get me() { return me }, get mode() { return mode }, profile, startOffline: beginPlayerRace,
   get online() { return online }, get myId() { return myId },
   setPaused: p => { paused = p }, fx, camera, renderer,
-  autopilot(force) { autopilot = me ? createDriver(world, me, planRoute(world, Math.random, 0.5, force)) : null },
+  autopilot() {
+    if (!me) return
+    const e = race.entry(myId)
+    autopilot = createDriver(world, me, { pts: [{ x: me.x, z: me.z, vmax: 99 }, { x: me.x + 1, z: me.z + 1, vmax: 99 }], picks: [], boostZones: [] })
+    autopilot.lead = 0; autopilot.replan = 0
+    e.driver = autopilot
+  },
+  stopAutopilot() { autopilot = null },
   teleport(x, z, yaw = 0, speed = 0) { if (!me) return; me.x = x; me.z = z; me.y = world.groundAt(x, z, 50).h + 0.6; me.yaw = yaw; me.vx = Math.sin(yaw) * speed; me.vz = Math.cos(yaw) * speed; me.vy = 0; snapCamera() }
 }

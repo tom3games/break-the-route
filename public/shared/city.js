@@ -177,7 +177,10 @@ export function buildCity() {
   const kick = (x, z, dx, dz, roll = 0) => slabs.push({ cx: x, cz: z, yaw: Math.atan2(dx, dz), hw: 3.4, hl: 5, y0: 0.02, y1: 2.0, thick: 0.4, surf: 'wood', solid: true, kind: roll ? 'roll' : 'kicker', roll })
   kick(-7, Z(200), 0, 1, 1); kick(7, Z(560), 0, 1, 0); kick(X(-240) - 7, Z(460), 0, 1, -1); kick(X(120), Z(680) + 7, 1, 0, 1); kick(X(240) + 7, Z(200), 0, -1, 0); kick(X(-60), Z(360) - 4, -1, 0, -1)
 
-  repair.push({ x0: X(-228), z0: Z(128), x1: X(-204), z1: Z(150), name: 'PIT' })
+  // 修理工場（2026-10-26 警察と犯人で追加）: 大通りの片側の車線に4か所。中で3秒止まると全回復（chase.js）
+  const shopV = (x, zc) => repair.push({ x0: x + 2, z0: zc - 12, x1: x + 13, z1: zc + 12, name: 'REPAIR' })
+  const shopH = (xc, z) => repair.push({ x0: xc - 12, z0: z + 2, x1: xc + 12, z1: z + 13, name: 'REPAIR' })
+  shopV(X(-240), Z(160)); shopV(X(240), Z(480)); shopV(0, Z(800)); shopH(X(-120), Z(680))
 
   // ---------------- チェックポイント（2周）
   const hwW = WIDE / 2 + 1, hwN = NORMAL / 2 + 1
@@ -223,6 +226,7 @@ export function buildCity() {
   return {
     roads, slabs, boxes, props, dirt: dirtRects, repair, decor: [], gates, grid, labels, routes, trees, laps: 2,
     shortcuts, lotRects, pickups, bounds: CITY_BOUNDS, fallY: -3, water: { z0: CANAL.z0, z1: CANAL.z1, y: -2.2 }, trafficLoops, grassRects, cityGrid: { XS, ZS, WIDE_X: [...WIDE_X], WIDE_Z: [...WIDE_Z] },
+    nav: { XS, ZS, canal: { z0: CANAL.z0, z1: CANAL.z1 }, bridges: BRIDGES, downtownX: X(130), downtownZ: Z(360), mid: MID },
     ground: (x, z) => grassRects.some(r => x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) ? 'grass' : 'road'
   }
 }

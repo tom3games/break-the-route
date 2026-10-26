@@ -66,7 +66,8 @@ function damage(c, amount, parts, kind) {
   if (amount <= 0) return 0
   const a = amount / c.stats.durability
   for (const [k, w] of Object.entries(parts)) c.dmg[k] = Math.max(0, c.dmg[k] - a * w)
-  if (c.dmg.body <= 0 && !c.wreck) {
+  if (c.dmg.body <= 0 && (!c.wreck || c.knock)) {
+    c.knock = false
     c.wreck = GAME.wreckRespawnSec
     c.events.push({ t: 'wreck', kind })
   }
@@ -87,7 +88,8 @@ export function step(c, inp, dt, world, others = null) {
     c.x += c.vx * dt; c.z += c.vz * dt; c.y += c.vy * dt
     const g = world.groundAt(c.x, c.z, c.y - PHYS.rideHeight)
     if (c.y < g.h + PHYS.rideHeight && !c.falling) { c.y = g.h + PHYS.rideHeight; c.vy = 0 }
-    if (c.wreck <= 0) respawn(c, { repair: true })
+    // 体当たりでスピンしただけ（ノックダウン）なら、その場から走り出す（遠くへ戻さない。追われている犯人が逃げられないように）
+    if (c.wreck <= 0) { if (c.knock) { c.knock = false; c.wreck = 0; c.freeze = 0.2 } else respawn(c, { repair: true }) }
     return
   }
   if (c.freeze > 0) { c.freeze -= dt; regen(c, dt, false); if (Math.hypot(c.vx, c.vz) < 1) { c.vx = c.vy = c.vz = 0 } return }
@@ -317,7 +319,7 @@ export function step(c, inp, dt, world, others = null) {
   }
 
   // ---- 修理ピット
-  if (c.grounded && world.inRepair(c.x, c.z) && speedOf(c) < 14) {
+  if (c.grounded && world.pitRegen !== false && world.inRepair(c.x, c.z) && speedOf(c) < 14) {
     for (const k in d) d[k] = Math.min(1, d[k] + 0.32 * dt)
     c.repairing = true
     if (d.body > 0.97 && c.dents.length) c.dents.length = 0
@@ -478,18 +480,20 @@ function bump(c, o) {
   const rv = (c.vx - (o.vx || 0)) * nx + (c.vz - (o.vz || 0)) * nz
   if (rv < 0) {
     const mo = o.stats ? o.stats.mass : 1
-    const share = mo / (c.stats.mass + mo)
+    // 一般車は軽く、当たってもほとんど止められない（相手が吹き飛ぶ）
+    const share = mo / (c.stats.mass + mo) * (o.traffic ? 0.35 : 1)
     // 少し弾む（1.0 なら止まるだけ）。重い相手ほど自分が飛ばされる
     c.vx -= nx * rv * 1.6 * share; c.vz -= nz * rv * 1.6 * share
     // 当たった位置が前後の端なら回される
     c.yaw += Math.sign(hit.a) * (nx * cc - nz * cs) * Math.min(0.5, -rv * 0.03) * share
     const sev = Math.max(0, -rv - 6)
-    if (sev > 0) damage(c, Math.pow(sev, 1.3) * DAMAGE.wallBase * DAMAGE.carHit, { body: 1, tires: 0.3 }, 'car')
+    if (sev > 0) damage(c, Math.pow(sev, 1.3) * DAMAGE.wallBase * DAMAGE.carHit * (o.traffic ? 0.3 : 1), { body: 1, tires: 0.3 }, 'car')
     // ノックダウン: 自分より速い相手に強く当てられたらスピンして脱落（すぐ近くで復帰）
     const so = Math.hypot(o.vx || 0, o.vz || 0), sc = speedOf(c)
     if (-rv > 12 && so > sc + 5 && !c.wreck) {
       c.lastHitBy = o.id; c.lastHitAt = c.t
       c.wreck = GAME.knockSec
+      c.knock = true
       c.events.push({ t: 'wreck', kind: 'knock' })
     }
     if (-rv > 3) c.events.push({ t: 'carhit', speed: -rv, other: o.id, x: c.x - nx * r, y: c.y, z: c.z - nz * r })

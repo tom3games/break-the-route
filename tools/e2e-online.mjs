@@ -1,10 +1,12 @@
-// オンライン対戦を実ブラウザ2つ（＋任意で webkit）でつないで最後まで通す。
-// node tools/e2e-online.mjs   （サーバーは自分で起動する）
+// オンラインの警察と犯人を実ブラウザ2つ（＋任意で webkit）でつないで最後まで通す。
+// 1回目は制限時間を40秒に縮めて自然に決着させ、2回目（再戦）は犯人を止めて警察に逮捕させる（両方の結末を見る）。
+// node tools/e2e-online.mjs [--webkit]   （サーバーは自分で起動する）
 import { chromium, webkit } from 'playwright'
 import { startServer } from '../server.mjs'
 import { mkdir } from 'node:fs/promises'
 const OUT = new URL('../shots/', import.meta.url).pathname
 await mkdir(OUT, { recursive: true })
+process.env.BTR_CHASE_LIMIT = '40'
 const srv = await startServer({ port: 8191, quiet: true })
 const URL0 = `http://localhost:${srv.port}/`
 const problems = [], notes = []
@@ -25,7 +27,6 @@ const A = await mk(bA, 'A'), B = await mk(bB, 'B')
 const ready = p => p.waitForFunction(() => window.__btrReady && !document.getElementById('btnOnline').disabled, null, { timeout: 30000 })
 await A.goto(URL0); await ready(A)
 await A.fill('#nameInput', 'ホスト')
-await A.evaluate(() => { window.__btr.profile.stage = 'touge' })
 await A.click('#btnOnline')
 await A.click('#btnCreate')
 await A.waitForFunction(() => /^[A-Z2-9]{4}$/.test(document.getElementById('roomCode').textContent))
@@ -50,10 +51,16 @@ await A.click('#btnStartOnline')
 await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'race' && window.__btr.race, null, { timeout: 10000 })))
 const nA = await A.evaluate(() => window.__btr.race.entries.length), nB = await B.evaluate(() => window.__btr.race.entries.length)
 ok(nA === 3 && nB === 3, '両方の画面に3台（人2＋CPU1）', `${nA}/${nB}`)
+const rolesA = await A.evaluate(() => window.__btr.race.entries.map(e => e.id + ':' + e.role + (e.bot ? ':bot' : '')).join(','))
+const rolesB = await B.evaluate(() => window.__btr.race.entries.map(e => e.id + ':' + e.role + (e.bot ? ':bot' : '')).join(','))
+ok(rolesA === rolesB && (rolesA.match(/robber/g) || []).length === 1 && !/robber:bot/.test(rolesA), '役が両方の画面で同じ（人の犯人1人・CPU は警察）', rolesA)
+const spawnSame = await Promise.all([A, B].map(p => p.evaluate(() => window.__btr.race.entries.map(e => Math.round(e.spawn.x) + ',' + Math.round(e.spawn.z)).join(' '))))
+ok(spawnSame[0] === spawnSame[1], 'スタート位置と隠れ家が両方で同じ', spawnSame[0])
 await A.screenshot({ path: OUT + 'online-A-countdown.png' })
-// 両者 CPU 運転。A は破壊ルート、B は安全ルート
-await A.evaluate(() => window.__btr.autopilot(['B', 'B', 'E', 'BE']))
-await B.evaluate(() => window.__btr.autopilot(['A', 'A', 'A', 'A']))
+await A.waitForTimeout(4500)
+// 両者 CPU と同じ考え方で運転（犯人は逃げる、警察は追う）
+await A.evaluate(() => window.__btr.autopilot())
+await B.evaluate(() => window.__btr.autopilot())
 // 同期の確認: A の車の位置を、B 側で見た A の車の位置と比べる
 const samples = []
 for (let i = 0; i < 12; i++) {
@@ -69,46 +76,58 @@ const maxGap = Math.max(...samples), avg = samples.reduce((s, v) => s + v, 0) / 
 // 100ms 遅らせて補間するので、時速150kmなら 4〜8m 遅れて見えるのが正常
 ok(samples.length >= 10 && avg < 14, 'B の画面の A の車が A の実位置についてくる', `平均差 ${avg.toFixed(1)}m 最大 ${maxGap.toFixed(1)}m（${samples.length}回）`)
 await B.screenshot({ path: OUT + 'online-B-race.png' })
-// 破壊の同期: A が壊した物が B でも壊れている（A が何か壊すまで待つ）
-await A.waitForFunction(() => window.__btr.world.destroyed.size >= 2, null, { timeout: 60000 }).catch(() => {})
+// 破壊の同期: 誰かが壊した物が両方で壊れている（何か壊れるまで待つ）
+await A.waitForFunction(() => window.__btr.world.destroyed.size >= 1, null, { timeout: 30000 }).catch(() => {})
 await A.waitForTimeout(1500)
-console.log('A state', JSON.stringify(await A.evaluate(() => ({ z: window.__btr.me.z, x: window.__btr.me.x, t: window.__btr.race.t, phase: window.__btr.race.phase, cp: window.__btr.race.entry(window.__btr.myId).cp, stage: window.__btr.world.stage, ap: !!window.__btr.me }))))
 const [dA, dB] = await Promise.all([A, B].map(p => p.evaluate(() => [...window.__btr.world.destroyed])))
 const missing = dA.filter(id => !dB.includes(id))
-ok(dA.length >= 2 && missing.length <= 1, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
-// 最後まで
-await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 330000 }).catch(() => {})))
+ok(dA.length >= 1 && missing.length <= 1, '壊れた物が両方の画面で一致', `A ${dA.length}個 / B ${dB.length}個 / B に無い ${missing.length}`)
+// 最後まで（制限時間40秒）
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 90000 }).catch(() => {})))
 await A.waitForTimeout(2500)
 await A.screenshot({ path: OUT + 'online-A-results.png' })
 await B.screenshot({ path: OUT + 'online-B-results.png' })
 const rA = await A.$$eval('#rBody tr', t => t.map(r => r.textContent))
 const rB = await B.$$eval('#rBody tr', t => t.map(r => r.textContent))
 ok(rA.length === 3 && JSON.stringify(rA) === JSON.stringify(rB), '結果が両方で同じ', rA.map(s => s.slice(0, 30)).join(' | '))
+const out1 = await A.textContent('#rTitle') + ' ' + await A.textContent('#rReason')
+ok(/勝ち/.test(out1), '1回目の結末が出る', out1)
 ok(await B.isDisabled('#btnAgain') && !(await A.isDisabled('#btnAgain')), '再戦はホストだけ押せる')
 // 再戦
 await A.click('#btnAgain')
 await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'race' && window.__btr.race.phase !== 'done', null, { timeout: 10000 }).catch(() => {})))
 const again = await Promise.all([A, B].map(p => p.evaluate(() => window.__btr.mode)))
-ok(again.every(m => m === 'race'), '再戦で両方がレースに戻る', again.join(','))
-// 街ステージでもオンラインで走れる（一般車も両方の画面で同じ位置）
-const trafficSame = await Promise.all([A, B].map(p => p.evaluate(() => { const r = window.__btr.race; return r.traffic ? r.traffic.cars.slice(0, 3).map(c => [Math.round(c.x), Math.round(c.z)]) : null })))
-notes.push('    (再戦は峠ステージのまま。街の一般車の同期は単体テストで確認)')
+ok(again.every(m => m === 'race'), '再戦で両方が追跡に戻る', again.join(','))
+const trafficSame = await Promise.all([A, B].map(p => p.evaluate(() => { const r = window.__btr.race; r.traffic.update(30, 1 / 60); return r.traffic.cars.slice(0, 3).map(c => [Math.round(c.x), Math.round(c.z)]).join(' ') })))
+ok(trafficSame[0] === trafficSame[1], '一般車が両方の画面で同じ位置', trafficSame[0])
 const brokenAfter = await B.evaluate(() => window.__btr.world.destroyed.size)
 ok(brokenAfter === 0, '再戦で壊れた物が元に戻る', String(brokenAfter))
-// 切断と再接続: B を読み込み直すと同じ席でレースに戻る
-await B.evaluate(() => window.__btr.autopilot(['A', 'A', 'A', 'A']))
-await B.waitForTimeout(9000)
-const before = await B.evaluate(() => ({ id: window.__btr.myId, z: window.__btr.me.z }))
-await B.reload(); await B.waitForFunction(() => window.__btr && window.__btr.mode === 'race' && window.__btr.me, null, { timeout: 20000 }).catch(() => {})
-const after = await B.evaluate(() => window.__btr.me ? ({ id: window.__btr.myId, z: window.__btr.me.z }) : null)
-ok(after && after.id === before.id && Math.abs(after.z - before.z) < 80, '読み込み直しても同じ席で続きから走れる', JSON.stringify({ before, after }))
-const discA = await A.waitForFunction(id => window.__btr.race.entry(id).connected !== false, before.id, { timeout: 3000 }).then(() => true).catch(() => false)
-ok(discA !== false, '戻ったあとホスト側で接続中になる', String(discA))
+// 2回目: 犯人は止まったまま、警察は追う → 逮捕で終わる
+await A.waitForTimeout(4500)
+const robberPage = (await A.evaluate(() => window.__btr.me.role)) === 'robber' ? A : B
+const copPage = robberPage === A ? B : A
+await copPage.evaluate(() => window.__btr.autopilot())
+// 切断と再接続: 警察役を読み込み直すと同じ席で続きから走れる
+await copPage.waitForTimeout(6000)
+const before = await copPage.evaluate(() => ({ id: window.__btr.myId, x: window.__btr.me.x, z: window.__btr.me.z }))
+await copPage.reload(); await copPage.waitForFunction(() => window.__btr && window.__btr.mode === 'race' && window.__btr.me, null, { timeout: 20000 }).catch(() => {})
+const after = await copPage.evaluate(() => window.__btr.me ? ({ id: window.__btr.myId, x: window.__btr.me.x, z: window.__btr.me.z }) : null)
+ok(after && after.id === before.id && Math.hypot(after.x - before.x, after.z - before.z) < 80, '読み込み直しても同じ席で続きから走れる', JSON.stringify({ before, after }))
+await copPage.evaluate(() => window.__btr.autopilot())
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 90000 }).catch(() => {})))
+await A.waitForTimeout(2000)
+const out2 = await copPage.textContent('#rTitle') + ' ' + await copPage.textContent('#rReason')
+ok(/警察の勝ち/.test(out2), '2回目は止まった犯人を逮捕して警察の勝ち', out2)
+await copPage.screenshot({ path: OUT + 'online-cop-bust.png' })
+await A.click('#btnAgain').catch(() => {})
+await Promise.all([A, B].map(p => p.waitForFunction(() => window.__btr.mode === 'race', null, { timeout: 10000 }).catch(() => {})))
 // 途中退出: B が部屋を出ると A では退出扱い
+await A.waitForTimeout(5000)
+const bId = await B.evaluate(() => window.__btr.myId)
 await B.evaluate(() => window.__btr.online.leave())
 await A.waitForTimeout(1500)
-const left = await A.evaluate(id => window.__btr.race.entry(id).left, before.id)
-ok(left === true, '途中退出した人はホスト側で「途中退出」になる', String(left))
+const left = await A.evaluate(id => window.__btr.race.entry(id).left || (window.__btr.mode === 'results' && /犯人が退出/.test(document.getElementById('rReason').textContent)), bId)
+ok(left === true, '途中退出した人はホスト側で「途中退出」になる（犯人が抜けたら警察の勝ちで終わる）', String(left))
 for (const p of [A, B]) ok(p.errs.length === 0, p.name + ' のコンソールエラー 0', p.errs.slice(0, 3).join(' | '))
 console.log(notes.join('\n'))
 console.log(problems.length ? problems.join('\n') : 'ALL OK')

@@ -7,7 +7,7 @@ await mkdir(OUT, { recursive: true })
 const srv = await startServer({ port: 8192, quiet: true })
 const useWebkit = process.argv.includes('webkit')
 const browser = await (useWebkit ? webkit : chromium).launch(useWebkit ? {} : { args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] })
-const sizes = [[1920, 1080], [1366, 768], [1280, 720], [960, 540]]
+const sizes = [[1920, 1080], [1366, 768], [1280, 720], [960, 540], [844, 390], [390, 844]]
 const bad = []
 for (const [w, h] of sizes) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, locale: 'ja-JP' })
@@ -40,6 +40,10 @@ for (const [w, h] of sizes) {
   await page.click('#btnLeave'); await page.click('#btnLobbyBack')
   await page.click('#btnOffline'); await page.waitForTimeout(5500); await check('race')
   await page.keyboard.press('Escape'); await page.waitForTimeout(300); await check('pause')
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200)
+  // 結果: 逮捕で終わらせて結果画面を見る
+  await page.evaluate(() => { const r = window.__btr.race; r.arrest(r.robbers[0], 'bust', r.cops[0].id) })
+  await page.waitForFunction(() => window.__btr.mode === 'results', null, { timeout: 8000 }); await page.waitForTimeout(1600); await check('results')
   if (errs.length) bad.push(`${w}x${h} errors: ${errs.slice(0, 3).join(' | ')}`)
   await ctx.close()
 }

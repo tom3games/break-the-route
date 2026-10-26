@@ -456,7 +456,10 @@ export function buildScene(scene, world) {
   for (const r of world.repair) {
     const cx = (r.x0 + r.x1) / 2, cz = (r.z0 + r.z1) / 2
     const h0 = terrain(cx, cz)
-    const pad = new THREE.Mesh(new THREE.PlaneGeometry(r.x1 - r.x0, r.z1 - r.z0).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ map: textTexture('PIT', { bg: '#1d6fd1', fg: '#fff', w: 256, h: 256, font: 'bold 96px sans-serif' }), roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -6 }))
+    // 文字が鏡写しにならないよう横に裏返して貼る
+    const padTex = textTexture('REPAIR', { bg: '#1d6fd1', fg: '#fff', w: 256, h: 256, font: 'bold 56px sans-serif' })
+    padTex.wrapS = THREE.RepeatWrapping; padTex.repeat.x = -1
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(r.x1 - r.x0, r.z1 - r.z0).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -6 }))
     pad.position.set(cx, h0 + 0.12, cz)
     root.add(pad)
     const roof = new THREE.Mesh(new THREE.BoxGeometry(r.x1 - r.x0, 0.4, r.z1 - r.z0), new THREE.MeshStandardMaterial({ color: 0x2b78d6, roughness: 0.6 }))

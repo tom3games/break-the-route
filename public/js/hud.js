@@ -1,8 +1,7 @@
-// レース中の表示（順位・時間・進み具合・損傷・速度・ブースト・小地図）
-import { GAME, CARS } from '../shared/config.js'
+// 追跡中の表示（役・残り時間・手配度・逮捕ゲージ・無線・損傷・速度・ブースト・小地図）
+import { GAME, CARS, CHASE } from '../shared/config.js'
 import { speedOf } from '../shared/physics.js'
-import { gateAt, totalGates } from '../shared/track.js'
-import { t, placeText } from './i18n.js'
+import { t } from './i18n.js'
 
 const $ = id => document.getElementById(id)
 const COLORS = ['#ff5a1f', '#3b8cff', '#f2c230', '#36c37a', '#f07acb', '#eeeeee', '#9b6bff', '#ff8a1f']
@@ -25,30 +24,31 @@ export class HUD {
 
   setup(race, me) {
     this.race = race; this.me = me
-    const tr = $('hTrack'); tr.innerHTML = ''
-    const n = totalGates(this.world), per = this.world.gates.length
-    for (let i = 0; i < n; i++) {
-      const g = gateAt(this.world, i)
-      const d = document.createElement('div'); d.className = 'cp'
-      d.style.left = ((i + 1) / n * 100) + '%'
-      // 周回コースは各周の終わりだけ名前を出す
-      const label = this.world.laps > 1 ? ((i + 1) % per === 0 ? (i + 1 === n ? 'GOAL' : 'LAP ' + ((i + 1) / per + 1)) : '') : g.name
-      d.innerHTML = `<span>${label}</span>`
-      tr.appendChild(d)
-    }
-    this.dots = new Map()
-    race.entries.forEach((e, i) => {
-      const d = document.createElement('div'); d.className = 'dot' + (e.car === me ? ' me' : '')
-      d.style.background = e.car === me ? '#ff5a1f' : COLORS[(i + 1) % COLORS.length]
-      tr.appendChild(d)
-      this.dots.set(e.id, d)
-      e.color = e.car === me ? '#ff5a1f' : COLORS[(i + 1) % COLORS.length]
-    })
-    $('hPosOf').textContent = '/' + race.entries.length
+    const myE = me ? race.entries.find(e => e.car === me) : null
+    this.role = myE ? myE.role : null
+    const role = $('hRole')
+    role.className = 'role ' + (this.role || '')
+    role.innerHTML = this.role === 'cop' ? `${ICON_COP}<span>${t('roleCop')}</span>` : this.role === 'robber' ? `${ICON_ROBBER}<span>${t('roleRobber')}</span>` : ''
+    // 手配度の星（SVG）
+    const heat = $('hHeat'); heat.innerHTML = ''
+    for (let i = 0; i < 5; i++) { const sp = document.createElement('span'); sp.innerHTML = STAR; heat.appendChild(sp) }
+    this.heatSeen = 0
+    race.entries.forEach((e, i) => { e.color = e.car === me ? '#ff5a1f' : e.role === 'cop' ? '#5aa8ff' : '#ff4d6d' })
     $('hCount').textContent = ''
     this.lastCount = null
     this.message('', '', 0)
     this.dmgEls = null
+    this.radio('', 0)
+  }
+
+  // 無線（画面の上の帯）
+  radio(text, dur = 3.2) {
+    const el = $('hRadio')
+    if (!text) { el.classList.remove('show'); this.radioT = 0; return }
+    el.innerHTML = `${ICON_RADIO}<span></span>`
+    el.querySelector('span').textContent = text
+    el.classList.remove('show'); void el.offsetWidth; el.classList.add('show')
+    this.radioT = dur
   }
 
   message(text, sub = '', dur = 1.2) {
@@ -89,44 +89,59 @@ export class HUD {
     const low = me ? Math.max(0, 0.35 - me.dmg.body) * 1.2 : 0
     $('hVig').style.boxShadow = `inset 0 0 ${120 + this.vig * 80}px rgba(255,30,20,${Math.min(0.75, this.vig * 0.6 + low)})`
 
+    if (this.radioT > 0) { this.radioT -= dt; if (this.radioT <= 0) $('hRadio').classList.remove('show') }
+    // 手配度
+    for (let i = 0; i < 5; i++) $('hHeat').children[i].classList.toggle('on', i < race.heat)
+    if (race.heat !== this.heatSeen) { this.heatSeen = race.heat; $('hHeat').classList.remove('bump'); void $('hHeat').offsetWidth; $('hHeat').classList.add('bump') }
+    // 残り時間
+    const left = Math.max(0, race.timeLimit - Math.max(0, race.t))
+    $('hTime').textContent = fmtClock(left)
+    $('hTime').classList.toggle('low', left < 20)
+
     if (!me) return
     const myE = race.entries.find(e => e.car === me)
-    const time = myE.finished ? myE.time : Math.max(0, race.t)
-    $('hTime').textContent = fmt(time)
-    const st = race.standings()
-    const myPlace = st.indexOf(myE) + 1
-    $('hPos').textContent = placeText(myPlace).replace(/[A-Z]+$/, '')
-    $('hPosOf').textContent = placeText(myPlace).replace(/^\d+/, '') + ' /' + st.length
+    // 逮捕ゲージ（自分が犯人なら自分の、警察ならいちばんたまっている犯人の）
+    const rob = this.role === 'robber' ? myE : race.robbers.reduce((a, r) => (!a || r.bust > a.bust ? r : a), null)
+    const bust = rob ? rob.bust : 0
+    const bustEl = $('hBust')
+    bustEl.classList.toggle('show', bust > 0.01 && race.phase === 'racing')
+    bustEl.querySelector('i').style.width = Math.round(bust * 100) + '%'
+    bustEl.querySelector('span').textContent = this.role === 'robber' ? t('bustYou') : t('bustCop')
 
-    // 次のゲート
-    const tot = totalGates(W)
-    const g = gateAt(W, Math.min(myE.cp, tot - 1))
-    const lap = W.laps > 1 ? `LAP ${Math.min(W.laps, Math.floor(myE.cp / W.gates.length) + 1)}/${W.laps}  ` : ''
-    const gname = myE.cp === tot - 1 ? 'GOAL' : g.name
-    $('hNext').textContent = myE.finished ? t('goal') : `${lap}${t('nextCp')} ${gname}  ${Math.round(Math.hypot(g.cx - me.x, g.cz - me.z))}m`
-
-    // 進み具合（全員）
-    for (const e of race.entries) {
-      const d = this.dots.get(e.id)
-      if (!d) continue
-      const p = Math.min(totalGates(W), race.progress(e))
-      d.style.left = (Math.min(1, p / totalGates(W)) * 100) + '%'
-      d.style.opacity = e.left ? 0.25 : 1
+    // 目的（次にやること）
+    const H = race.hideout
+    let goal = ''
+    if (this.role === 'robber') {
+      if (myE.arrested) goal = t('msgCaught')
+      else if (myE.escaped) goal = t('msgEscaped')
+      else if (H.open) goal = `${t('toHideout')} ${Math.round(Math.hypot(H.x - me.x, H.z - me.z))}m（${H.area}）`
+      else goal = `${t('escapeGoal')}　${t('hideoutIn')} ${Math.max(0, Math.ceil(CHASE.hideoutOpenAt - race.t))}s`
+    } else {
+      const k = this.known(race, me)
+      goal = k ? `${k.live ? t('robberDist') : t('lastSeen')} ${Math.round(Math.hypot(k.x - me.x, k.z - me.z))}m` : t('findRobber')
+    }
+    $('hNext').textContent = goal
+    // 修理工場の中
+    if (myE.inShop >= 0 || myE.rep > 0 || myE.repSeen) {
+      if (myE.repSeen) this.hint(t('repairSeen'), 0.3)
+      else if (myE.repairCd > 0) this.hint(t('repairWait').replace('{n}', Math.ceil(myE.repairCd)), 0.3)
+      else if (myE.rep > 0) this.hint(`${t('repairing')} ${'■'.repeat(Math.ceil(myE.rep * 6))}${'□'.repeat(6 - Math.ceil(myE.rep * 6))}`, 0.3)
+      else this.hint(t('repairHint'), 0.3)
     }
 
-    // 順位表（5回/秒）
+    // 人の一覧（役と状態）
     this.standT -= dt
     if (this.standT <= 0) {
-      this.standT = 0.2
+      this.standT = 0.25
       const ol = $('hStand'); ol.innerHTML = ''
-      st.forEach((e, i) => {
+      for (const e of [...race.robbers, ...race.cops]) {
         const li = document.createElement('li')
         if (e.car === me) li.className = 'me'
-        const status = e.finished ? fmt(e.time) : e.left ? t('left') : e.car.wreck > 0 ? t('msgWreck') : (W.laps > 1 ? 'L' + (Math.floor(e.cp / W.gates.length) + 1) + ' ' : '') + gateAt(W, e.cp).name
-        li.innerHTML = `<span>${i + 1}</span><span class="sw" style="background:${e.color}"></span><span class="nm"></span><span class="st">${status}</span>`
+        const st = e.left ? t('left') : e.arrested ? t('busted') : e.escaped ? t('escaped') : e.car.wreck > 0 ? t('msgWreck') : e.role === 'robber' ? t('onRun') : (e.arrests ? t('busted') + e.arrests : '')
+        li.innerHTML = `<span class="ic">${e.role === 'cop' ? ICON_COP : ICON_ROBBER}</span><span class="nm"></span><span class="st">${st}</span>`
         li.querySelector('.nm').textContent = e.car.name
         ol.appendChild(li)
-      })
+      }
     }
 
     // 速度とブースト
@@ -202,26 +217,37 @@ export class HUD {
     // 壊せる物（残っているもの）
     g.fillStyle = '#ff9a3c'
     for (const o of W.objects) if (!W.destroyed.has(o.id) && o.def.breakAt >= 14) rectRot(g, o, 1.5)
-    // 近道（オレンジの点線）とニトロ缶
-    g.save(); g.strokeStyle = '#ff8a1f'; g.lineWidth = 3 / sc; g.setLineDash([6 / sc, 5 / sc])
-    for (const s2 of W.shortcuts || []) { g.beginPath(); g.moveTo(-s2.entry[0], -s2.entry[1]); g.lineTo(-s2.inA[0], -s2.inA[1]); g.lineTo(-s2.outB[0], -s2.outB[1]); g.lineTo(-s2.exit[0], -s2.exit[1]); g.stroke() }
-    g.restore()
+    // ニトロ缶
     g.fillStyle = '#3ab6ff'
     for (const pk of W.pickups || []) { g.beginPath(); g.arc(-pk.x, -pk.z, 2.4 / sc, 0, Math.PI * 2); g.fill() }
-    // 修理ピット
-    g.fillStyle = 'rgba(59,140,255,0.8)'
-    for (const r of W.repair) g.fillRect(-r.x1, -r.z1, r.x1 - r.x0, r.z1 - r.z0)
-    // 次のゲート
-    const e = race.entries.find(en => en.car === me)
-    const gt = gateAt(W, Math.min(e.cp, totalGates(W) - 1))
-    g.strokeStyle = '#ffb020'; g.lineWidth = 4 / sc
-    g.beginPath(); g.moveTo(-gt.a.x, -gt.a.z); g.lineTo(-gt.b.x, -gt.b.z); g.stroke()
-    // 車
+    // 修理工場（青い四角に白い縁）
+    g.fillStyle = 'rgba(59,140,255,0.95)'; g.strokeStyle = '#fff'; g.lineWidth = 2 / sc
+    for (const r of W.repair) { g.fillRect(-r.x1, -r.z1, r.x1 - r.x0, r.z1 - r.z0); g.strokeRect(-r.x1, -r.z1, r.x1 - r.x0, r.z1 - r.z0) }
+    // ランチャーの予告
+    g.strokeStyle = '#ff2a2a'; g.lineWidth = 3 / sc
+    for (const s2 of race.strikes || []) if (!s2.done) { g.beginPath(); g.arc(-s2.x, -s2.z, s2.r, 0, Math.PI * 2); g.stroke() }
+    // 隠れ家（犯人にだけ。開いたら緑）
+    const H = race.hideout
+    if (H && this.role === 'robber') {
+      g.fillStyle = H.open ? '#36e07a' : 'rgba(54,224,122,0.35)'
+      g.beginPath(); g.arc(-H.x, -H.z, 9 / sc, 0, Math.PI * 2); g.fill()
+    }
+    // 車: 犯人には警察が近くだけ見える。警察には犯人が「近い・無線の直後・ヘリ」のときだけ見え、それ以外は最後の目撃の印
     for (const en of race.entries) {
       const c = en.car
       if (c === me) continue
+      const d = Math.hypot(c.x - me.x, c.z - me.z)
+      if (this.role === 'cop' && en.role === 'robber') {
+        const k = this.known(race, me, en)
+        if (!k) continue
+        g.fillStyle = k.live ? '#ff4d6d' : 'rgba(255,77,109,0.5)'
+        g.beginPath(); g.arc(-k.x, -k.z, (k.live ? 6 : 9) / sc, 0, Math.PI * 2); g.fill()
+        if (!k.live) { g.strokeStyle = '#ff4d6d'; g.lineWidth = 2 / sc; g.beginPath(); g.arc(-k.x, -k.z, 16 / sc, 0, Math.PI * 2); g.stroke() }
+        continue
+      }
+      if (this.role === 'robber' && en.role === 'cop' && d > 320) continue
       g.fillStyle = en.color || '#fff'
-      g.beginPath(); g.arc(-c.x, -c.z, 4 / sc, 0, Math.PI * 2); g.fill()
+      g.beginPath(); g.arc(-c.x, -c.z, 4.5 / sc, 0, Math.PI * 2); g.fill()
     }
     g.restore()
     g.restore()
@@ -230,6 +256,25 @@ export class HUD {
     g.beginPath(); g.moveTo(R, R - 9); g.lineTo(R + 6, R + 7); g.lineTo(R - 6, R + 7); g.closePath(); g.fill(); g.stroke()
   }
 }
+
+// 警察の画面に見える犯人の位置: 近い（CHASE.seeDist）・無線の直後・ヘリが照らしている → 本当の位置、それ以外は最後の目撃
+HUD.prototype.known = function (race, me, rob = null) {
+  const r = rob || race.robbers.find(x => !x.left && !x.arrested && !x.escaped) || race.robbers[0]
+  if (!r) return null
+  const c = r.car
+  if (r.arrested || r.escaped || Math.hypot(c.x - me.x, c.z - me.z) < CHASE.seeDist || race.t < race.pingUntil || race.heat >= CHASE.heli) return { x: c.x, z: c.z, live: true }
+  return r.lastSeen ? { x: r.lastSeen.x, z: r.lastSeen.z, live: false } : null
+}
+
+function fmtClock(s) {
+  const m = Math.floor(s / 60), r = Math.floor(s - m * 60)
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+export const ICON_COP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="currentColor"/><path d="m12 7 1.5 3 3.3.5-2.4 2.3.6 3.3L12 14.6 9 16.1l.6-3.3-2.4-2.3 3.3-.5z" fill="#14161a"/></svg>'
+export const ICON_ROBBER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9c3-1 6-1.5 9-1.5s6 .5 9 1.5v3.5c-3 1-6 1.5-9 1.5s-6-.5-9-1.5z" fill="currentColor"/><circle cx="8.3" cy="10.8" r="1.6" fill="#14161a"/><circle cx="15.7" cy="10.8" r="1.6" fill="#14161a"/><path d="M7 17c1.5 1.2 3.2 1.8 5 1.8s3.5-.6 5-1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+const ICON_RADIO = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="7" width="12" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 2l3 5M12 12h3M9 16h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+const STAR = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2.5 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5L2.5 9.4l6.6-.9z" fill="currentColor" stroke="#fff" stroke-opacity=".75" stroke-width="1.3" stroke-linejoin="round"/></svg>'
 
 function rectRot(g, o, pad = 0) {
   g.save()
@@ -245,40 +290,33 @@ export function fmt(s) {
   return `${m}:${r.toFixed(2).padStart(5, '0')}`
 }
 
-// コース全体図（遊び方の画面）
+// 街の全体図（遊び方の画面）。北が上
 export function drawFullMap(cv, W) {
   const g = cv.getContext('2d')
-  const { x0, x1, z0, z1 } = { x0: -310, x1: 240, z0: -60, z1: 1215 }
+  const B = W.bounds || { x0: -310, x1: 240, z0: -60, z1: 1215 }
+  const pad = 30
+  const x0 = B.x0 - pad, x1 = B.x1 + pad, z0 = B.z0 - pad, z1 = B.z1 + pad
   const sc = Math.min(cv.width / (x1 - x0), cv.height / (z1 - z0))
   g.clearRect(0, 0, cv.width, cv.height)
   g.save()
-  // 北が上、東が右
-  g.translate(cv.width / 2 - ((x0 + x1) / 2) * sc, cv.height - 6)
+  g.translate(cv.width / 2 - ((x0 + x1) / 2) * sc, cv.height / 2 + ((z0 + z1) / 2) * sc)
   g.scale(sc, -sc)
-  g.fillStyle = 'rgba(120,80,60,0.55)'
-  g.fillRect(-230, 660, 380, 100) // 峡谷
+  if (W.water) { g.fillStyle = 'rgba(60,120,190,0.6)'; g.fillRect(x0, W.water.z0, x1 - x0, W.water.z1 - W.water.z0) }
   g.lineCap = 'round'; g.lineJoin = 'round'
   for (const r of W.roads) {
-    g.strokeStyle = r.surf === 'dirt' ? '#a8814f' : '#cfd3da'
+    g.strokeStyle = '#cfd3da'
     g.lineWidth = Math.max(3 / sc, r.w)
-    g.beginPath(); r.pts.forEach(([x, z], i) => i ? g.lineTo(x, z - z0) : g.moveTo(x, z - z0)); g.stroke()
+    g.beginPath(); r.pts.forEach(([x, z], i) => i ? g.lineTo(x, z) : g.moveTo(x, z)); g.stroke()
   }
-  g.fillStyle = '#cfd3da'
-  for (const sl of W.slabs) if (!sl.needs && sl.kind !== 'mound') { g.save(); g.translate(sl.cx, sl.cz - z0); g.fillRect(-sl.hw, -sl.hl, sl.hw * 2, sl.hl * 2); g.restore() }
   g.fillStyle = 'rgba(0,0,0,0.5)'
-  for (const o of W.colliders) if (o.kind === 'building' || o.kind === 'whouse') g.fillRect(o.cx - o.hw, o.cz - o.hl - z0, o.hw * 2, o.hl * 2)
-  g.strokeStyle = '#ffb020'; g.lineWidth = 3 / sc
-  for (const gt of W.gates) { g.beginPath(); g.moveTo(gt.a.x, gt.a.z - z0); g.lineTo(gt.b.x, gt.b.z - z0); g.stroke() }
+  for (const o of W.colliders) if (o.kind === 'building' && o.hw < 200) g.fillRect(o.cx - o.hw, o.cz - o.hl, o.hw * 2, o.hl * 2)
   g.restore()
-  // ルート名
   g.font = 'bold 12px "Chakra Petch", sans-serif'
   g.textAlign = 'center'
-  const P = (x, z) => [cv.width / 2 + (x - (x0 + x1) / 2) * sc, cv.height - 6 - (z - z0) * sc]
+  const P = (x, z) => [cv.width / 2 + (x - (x0 + x1) / 2) * sc, cv.height / 2 - (z - (z0 + z1) / 2) * sc]
   for (const l of W.labels) {
     const [px, py] = P(l.x, l.z)
     g.fillStyle = '#14161a'; g.beginPath(); g.arc(px, py, 9, 0, Math.PI * 2); g.fill()
     g.fillStyle = '#f2c230'; g.fillText(l.t, px, py + 4)
   }
-  for (const gt of W.gates) { const [px, py] = P(gt.cx, gt.cz); g.fillStyle = '#ffb020'; g.textAlign = 'center'; g.fillText(gt.name, px, py - 6) }
-  const [sx, sy] = P(0, 0); g.fillStyle = '#36c37a'; g.textAlign = 'center'; g.fillText('START', sx, sy + 2)
 }

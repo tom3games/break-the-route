@@ -6,7 +6,7 @@ const KEY = 'btr-profile-v1'
 function fresh() {
   const cars = {}
   for (const id of Object.keys(CARS)) cars[id] = { levels: {}, paint: CARS[id].color }
-  return { name: '', credits: 600, car: 'runner', cars, cpu: 5, races: 0, best: null, stage: 'city' }
+  return { name: '', credits: 600, car: 'runner', cars, cpu: 3, races: 0, best: null, stage: 'city', role: 'robber', wins: 0 }
 }
 
 export function loadProfile() {
@@ -16,13 +16,14 @@ export function loadProfile() {
   if (!p || typeof p !== 'object') return f
   p = { ...f, ...p, cars: { ...f.cars, ...(p.cars || {}) } }
   if (!CARS[p.car]) p.car = 'runner'
-  if (p.stage !== 'touge' && p.stage !== 'city') p.stage = 'city'
+  p.stage = 'city' // 警察と犯人は街だけ
+  if (p.role !== 'cop' && p.role !== 'robber') p.role = 'robber'
   for (const id of Object.keys(CARS)) {
     const c = p.cars[id] || (p.cars[id] = { levels: {}, paint: CARS[id].color })
     for (const k of Object.keys(UPGRADES)) c.levels[k] = clampLevel(c.levels?.[k])
   }
   p.credits = Math.max(0, Math.floor(Number(p.credits) || 0))
-  p.cpu = Math.max(0, Math.min(7, Math.round(Number(p.cpu) || 0)))
+  p.cpu = Math.max(1, Math.min(6, Math.round(Number(p.cpu) || 3)))
   return p
 }
 
