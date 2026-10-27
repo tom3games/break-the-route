@@ -290,7 +290,7 @@ function startRace({ demo = false, view = null } = {}) {
   seenBroken = new Set()
   placeProps()
 
-  race = new Chase(world, { seed: view && view.seed != null ? view.seed : (Math.random() * 1e9) | 0, ...(view && view.timeLimit ? { timeLimit: view.timeLimit } : {}) })
+  race = new Chase(world, { seed: view && view.seed != null ? view.seed : (Math.random() * 1e9) | 0, ...(view && view.timeLimit ? { timeLimit: view.timeLimit } : {}), backup: !view && !demo })
   for (const g of built.gates) g.grp.visible = false // レースのゲートは使わない
   me = null
   autopilot = null
@@ -325,9 +325,9 @@ function startRace({ demo = false, view = null } = {}) {
       if (y.dmg) Object.assign(me.dmg, y.dmg)
     }
   } else if (!demo) {
-    // オフライン: 選んだ役で。警察の数は CPU の設定（1〜6）
+    // オフライン: 選んだ役で。警察の数は CPU の設定（1〜10）。手配度が上がると応援が足される
     const role = profile.role === 'cop' ? 'cop' : 'robber'
-    const nCops = Math.max(1, Math.min(6, profile.cpu || 3))
+    const nCops = Math.max(1, Math.min(CHASE.maxCpuStart, profile.cpu || 4))
     const mine = { id: 'me', name: profile.name || t('you'), carId: profile.car, levels: pc.levels, paint: role === 'robber' ? pc.paint : null, role }
     if (role === 'robber') { me = race.addHuman(mine); race.addBots(nCops, 'cop') }
     else { race.addBots(1, 'robber'); me = race.addHuman(mine); race.addBots(nCops - 1, 'cop') }
@@ -635,8 +635,8 @@ document.addEventListener('touchmove', e => { if (!e.target.closest('.panel')) e
 $('nameInput').value = profile.name
 $('nameInput').addEventListener('change', () => { profile.name = $('nameInput').value.trim().slice(0, 12); saveProfile(profile) })
 // 警察の数（1〜6）。自分が警察のときは自分を含む数
-for (let i = 1; i <= 6; i++) { const o = document.createElement('option'); o.value = i; o.textContent = i; $('cpuSelect').appendChild(o) }
-if (!(profile.cpu >= 1 && profile.cpu <= 6)) profile.cpu = 3
+for (let i = 1; i <= CHASE.maxCpuStart; i++) { const o = document.createElement('option'); o.value = i; o.textContent = i; $('cpuSelect').appendChild(o) }
+if (!(profile.cpu >= 1 && profile.cpu <= CHASE.maxCpuStart)) profile.cpu = 4
 $('cpuSelect').value = profile.cpu
 $('cpuSelect').addEventListener('change', () => { profile.cpu = Number($('cpuSelect').value); saveProfile(profile) })
 function renderCarPick() {
@@ -1058,7 +1058,10 @@ function frame() {
   // 車の見た目
   const alpha = paused ? 1 : acc / STEP
   if (race) for (const e of race.entries) {
-    const c = e.car, m = models.get(e.id)
+    const c = e.car
+    let m = models.get(e.id)
+    // 途中で増えた車（応援のパトカー）
+    if (!m && race.mode === 'chase' && !onlineRace) { m = makeModel(e, e.car.paint ?? (e.role === 'cop' ? COP_PAINT : ROBBER_PAINT)); scene.add(m.group); models.set(e.id, m) }
     if (!m) continue
     const p = prevState.get(e.id)
     const s = p ? { ...c, x: p.x + (c.x - p.x) * alpha, y: p.y + (c.y - p.y) * alpha, z: p.z + (c.z - p.z) * alpha, yaw: lerpAngle(p.yaw, c.yaw, alpha) } : c
@@ -1231,6 +1234,9 @@ function raceEvent(ev) {
     const near = Math.hypot(me.x - ev.fx, me.z - ev.fz)
     if (near < 140) audio.gunshot(Math.max(0.15, 1 - near / 140))
     if (!cop && ev.hit && ev.hit.includes(myId) && !race._shotOnce) { race._shotOnce = true; hud.message(t('msgShot'), t('msgShotSub'), 1.6) }
+  }
+  if (ev.t === 'backup') {
+    hud.radio((cop ? t('radioBackupCop') : t('radioBackupRobber')).replace('{n}', ev.n), 2.4); audio.radio()
   }
   if (ev.t === 'spike') {
     if (cop) { hud.radio(t('radioSpikeCop'), 2.4); audio.radio() }

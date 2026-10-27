@@ -16,7 +16,8 @@ for (const [w, h] of [[390, 844], [844, 390]]) {
   p.on('pageerror', e => errs.push(e.message))
   await p.goto(`http://localhost:5197/?v=${Date.now()}`)
   await p.waitForFunction(() => window.__btrReady, null, { timeout: 60000 })
-  await p.evaluate(() => { window.__btr.profile.stage = 'city'; window.__btr.startOffline() })
+  // COPS=警察の数、HEAT=1 で開始直後に手配度5（応援が全部来た状態）
+  await p.evaluate(({ cops, heat }) => { window.__btr.profile.stage = 'city'; window.__btr.profile.cpu = cops; window.__btr.startOffline(); if (heat) setTimeout(() => { window.__btr.race.heatBonus = 4 }, 4000) }, { cops: Number(process.env.COPS || 4), heat: !!process.env.HEAT })
   await p.waitForTimeout(5500)
   await p.evaluate(() => window.__btr.autopilot && window.__btr.autopilot())
   await p.waitForTimeout(1500)

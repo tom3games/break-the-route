@@ -30,7 +30,7 @@ export function mulberry(seed) {
 }
 
 export class Chase {
-  constructor(world, { seed = 1, timeLimit = CHASE.timeLimit } = {}) {
+  constructor(world, { seed = 1, timeLimit = CHASE.timeLimit, backup = true } = {}) {
     this.world = world
     world.reset()
     this.mode = 'chase'
@@ -73,6 +73,8 @@ export class Chase {
     this.spikeSeq = 0
     this.spikeHits = new Set() // 'スパイクの id:車の id'（1本につき1台1回）
     this.nextSpike = 0
+    this.backupOn = backup
+    this.backupCount = 0
     this.walls = (world.colliders || []).filter(b => !b.slab && b.y1 != null && b.y1 - b.y0 > 3)
   }
 
@@ -135,7 +137,7 @@ export class Chase {
   }
 
   addBots(n, role = 'cop') {
-    for (let i = 0; i < n && this.entries.length < GAME.maxPlayers; i++) {
+    for (let i = 0; i < n && this.entries.length < CHASE.maxCops + 2; i++) {
       const k = this.entries.filter(e => e.bot).length
       const id = 'bot' + k
       const spawn = this.spawnFor(role)
@@ -310,6 +312,7 @@ export class Chase {
     // 手配度
     const h = Math.max(1, Math.min(5, 1 + Math.floor(this.t / CHASE.heatEvery) + this.heatBonus - this.heatDrop))
     if (h !== this.heat) { this.heat = h; this.events.push({ t: 'heat', heat: h }) }
+    if (this.backupOn && !this.remoteJudge) this.callBackup()
     // 隠れ家
     if (!this.hideout.open && this.t >= CHASE.hideoutOpenAt) { this.hideout.open = true; this.events.push({ t: 'hideout', area: this.hideout.area }) }
     // 無線（警察に犯人の位置と向かう方角を知らせる。地図にしばらく出る）
@@ -371,6 +374,25 @@ export class Chase {
     if (!this.remoteJudge) { this.updateHeli(dt); this.updateGuns(dt); this.placeSpikes(); this.judgeRepair(dt) }
     this.checkSpikes()
     this.judge(dt)
+  }
+
+  // ---- 応援のパトカー（手配度が上がると、犯人から離れた交差点に追加で現れる）
+  callBackup() {
+    const want = CHASE.backup[this.heat] || 0
+    if (this.backupCount >= want) return
+    if (this.cops.filter(o => !o.left).length >= CHASE.maxCops) return
+    const before = this.entries.length
+    this.addBots(1, 'cop')
+    if (this.entries.length === before) { this.backupCount = want; return }
+    const e = this.entries[this.entries.length - 1]
+    const p = this.copBackPoint(e.car)
+    Object.assign(e.car, { x: p.x, z: p.z, yaw: p.yaw, vx: 0, vz: 0 })
+    e.car.y = this.world.groundAt(p.x, p.z, 50).h + 0.6
+    e.car.respawnPoint = { ...p }
+    e.px = p.x; e.pz = p.z
+    e.driver.replan = 0
+    this.backupCount++
+    this.events.push({ t: 'backup', id: e.id, n: this.cops.filter(o => !o.left).length })
   }
 
   // ---- 修理工場

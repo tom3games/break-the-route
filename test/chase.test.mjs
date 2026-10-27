@@ -284,7 +284,7 @@ test('結果の車体は決着した瞬間の値（大破で逮捕されたあ�
 })
 
 test('拳銃: 手配度1では撃たず、2から CPU の警察が近くの犯人を撃つ。建物の陰には当たらず、弾だけでは大破しない', () => {
-  const ch = new Chase(city(), { seed: 5 })
+  const ch = new Chase(city(), { seed: 5, backup: false })
   const rob = ch.addHuman({ id: 'r', name: 'R', role: 'robber' })
   ch.addBots(1, 'cop')
   const cop = ch.cops[0].car
@@ -369,4 +369,35 @@ test('スパイクベルト: 手配度4から犯人の行く手の道に敷き�
   rob.flat = true
   ch.completeRepair(ch.entry('r'))
   assert.equal(rob.flat, false)
+})
+
+test('応援のパトカー: 手配度が上がるたびに犯人から離れた所に足される（上限まで）。止めれば増えない', () => {
+  const ch = new Chase(city(), { seed: 7 })
+  const rob = ch.addHuman({ id: 'r', name: 'R', role: 'robber' })
+  ch.addBots(3, 'cop')
+  run(ch, GAME.countdownSec + 1)
+  assert.equal(ch.cops.length, 3)
+  const added = []
+  const watch = sec => { for (let i = 0; i < sec * 60; i++) { rob.vx = rob.vz = 0; ch.stepFixed(DT, {}); added.push(...ch.events.filter(e => e.t === 'backup')); ch.events.length = 0; for (const e of ch.entries) e.car.events.length = 0; ch.robbers[0].bust = 0 } }
+  for (const c of ch.cops) { c.car.x = rob.x + 600; c.car.z = rob.z }
+  ch.heatBonus = 2; watch(1) // 手配度3
+  assert.equal(ch.cops.length, 3 + CHASE.backup[3])
+  ch.heatBonus = 4; watch(1) // 手配度5
+  assert.equal(ch.cops.length, 3 + CHASE.backup[5])
+  assert.equal(added.length, CHASE.backup[5])
+  for (const ev of added) {
+    const c = ch.entry(ev.id).car
+    const d = Math.hypot(c.x - rob.x, c.z - rob.z)
+    assert.ok(d >= CHASE.copBackMin - 30, `犯人の近くには出ない ${d.toFixed(0)}m`)
+  }
+  // 上限
+  const big = new Chase(city(), { seed: 7 })
+  big.addHuman({ id: 'r', name: 'R', role: 'robber' }); big.addBots(CHASE.maxCpuStart, 'cop')
+  run(big, GAME.countdownSec + 1); big.heatBonus = 4; run(big, 1)
+  assert.ok(big.cops.length <= CHASE.maxCops, `上限 ${big.cops.length}`)
+  // backup: false なら増えない（オンライン）
+  const off = new Chase(city(), { seed: 7, backup: false })
+  off.addHuman({ id: 'r', name: 'R', role: 'robber' }); off.addBots(3, 'cop')
+  run(off, GAME.countdownSec + 1); off.heatBonus = 4; run(off, 1)
+  assert.equal(off.cops.length, 3)
 })

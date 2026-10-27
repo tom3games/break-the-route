@@ -6,7 +6,7 @@ const KEY = 'btr-profile-v1'
 function fresh() {
   const cars = {}
   for (const id of Object.keys(CARS)) cars[id] = { levels: {}, paint: CARS[id].color }
-  return { name: '', credits: 600, car: 'runner', cars, cpu: 3, races: 0, best: null, stage: 'city', role: 'robber', wins: 0 }
+  return { name: '', credits: 600, car: 'runner', cars, cpu: 4, races: 0, best: null, stage: 'city', role: 'robber', wins: 0 }
 }
 
 export function loadProfile() {
