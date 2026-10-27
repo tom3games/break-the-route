@@ -8,6 +8,8 @@
 //   犯人: 制限時間（3分）を逃げ切るか、90秒後に開く隠れ家に入れば勝ち（警察に見られていない＝30m 以内にいないとき）
 // 手配度（1〜5）は時間と、犯人が警察の車を大破させるたびに上がる。上がるほど警察の CPU が速く、無線の目撃情報が増え、
 // 3 からはヘリが犯人を照らし（警察の地図にずっと出る）、ランチャーを撃ってくる（赤い円で予告してから着弾）。
+// 手配度2からは、警察の CPU が拳銃を撃ってくる（近く・建物の陰でないときだけ。弾だけでは大破しない）。
+// 手配度4からは、犯人の行く手の道にスパイクベルトを敷く（踏むとパンクして遅く・滑りやすくなる。修理工場で直る）。
 // 修理工場（街に4か所）: 中で3秒止まると全回復。犯人は警察に見られていると直せず、直すと手配度が1下がり警察は見失う
 
 import { GAME, CHASE, REWARD } from './config.js'
@@ -63,6 +65,15 @@ export class Chase {
     this.downs = []     // { id, x, z, at } 大破した警察車（オンラインで他の画面へ伝える用）
     this.blasts = []    // { id, x, z, at, hit: [ids] } 着弾（画面の演出と、オンラインで犯人の画面へ伝える用）
     this.strikeSeq = 0
+    // 拳銃（手配度2から）。弾を遮る壁＝背の高い建物
+    this.shots = []     // { id, by, fx, fz, tx, tz, at, hit: [ids] }
+    this.shotSeq = 0
+    // スパイクベルト（手配度4から）
+    this.spikes = []    // { id, x, z, yaw, len, at, until }
+    this.spikeSeq = 0
+    this.spikeHits = new Set() // 'スパイクの id:車の id'（1本につき1台1回）
+    this.nextSpike = 0
+    this.walls = (world.colliders || []).filter(b => !b.slab && b.y1 != null && b.y1 - b.y0 > 3)
   }
 
   get robbers() { return this.entries.filter(e => e.role === 'robber') }
@@ -357,7 +368,8 @@ export class Chase {
       step(c, inp, dt, this.world, cars)
       this.afterStep(e)
     }
-    if (!this.remoteJudge) { this.updateHeli(dt); this.judgeRepair(dt) }
+    if (!this.remoteJudge) { this.updateHeli(dt); this.updateGuns(dt); this.placeSpikes(); this.judgeRepair(dt) }
+    this.checkSpikes()
     this.judge(dt)
   }
 
@@ -384,6 +396,7 @@ export class Chase {
   completeRepair(e) {
     const c = e.car
     for (const k in c.dmg) c.dmg[k] = 1
+    c.flat = false
     c.dents.length = 0
     c.boost = 1; c.boostLock = false
     e.rep = 0
@@ -450,6 +463,114 @@ export class Chase {
     }
     this.strikes = this.strikes.filter(s => !s.done || this.t - s.at < 0.5)
     this.blasts = this.blasts.filter(b => this.t - b.at < 3)
+  }
+
+  // ---- 拳銃（手配度2から）。警察の CPU が、近くて建物の陰でない犯人を撃つ。遠いほど・速いほど外れる
+  updateGuns(dt) {
+    if (this.phase !== 'racing' || this.heat < CHASE.gunHeat) { this.shots.length = 0; return }
+    const every = CHASE.gunEvery[this.heat]
+    for (const o of this.cops) {
+      if (!o.bot || o.left || o.car.wreck > 0) continue
+      if (o.gunCd == null) o.gunCd = this.rng() * every
+      o.gunCd -= dt
+      if (o.gunCd > 0) continue
+      const rob = this.nearestRobber(o.car)
+      if (!rob) continue
+      const c = o.car, r = rob.car
+      const d = Math.hypot(r.x - c.x, r.z - c.z)
+      if (d > CHASE.gunRange || d < 3 || Math.abs(r.y - c.y) > 6 || !this.clearShot(c.x, c.z, r.x, r.z)) { o.gunCd = 0.25; continue }
+      o.gunCd = every * (0.8 + this.rng() * 0.4)
+      const p = Math.max(CHASE.gunHitMin, CHASE.gunHit - d / CHASE.gunRange * 0.3 - speedOf(r) / 50 * 0.2)
+      const hit = this.rng() < p
+      // 外れた弾は犯人のまわりの地面へ
+      const m = hit ? 0 : 1.5 + this.rng() * 3, a = this.rng() * Math.PI * 2
+      const s = { id: ++this.shotSeq, by: o.id, fx: c.x, fz: c.z, tx: r.x + Math.cos(a) * m, tz: r.z + Math.sin(a) * m, at: this.t, hit: hit ? [rob.id] : [] }
+      if (hit && !rob.remote) gunHit(r)
+      this.shots.push(s)
+      this.events.push({ t: 'shot', ...s })
+    }
+    this.shots = this.shots.filter(s => this.t - s.at < 0.5)
+  }
+
+  // ---- スパイクベルト（手配度4から）。犯人がそのまま走ったら数秒後に来る道に、道の幅の6割ほどを塞いで敷く（空いた側を通れば避けられる）
+  placeSpikes() {
+    this.spikes = this.spikes.filter(sp => this.t < sp.until)
+    if (this.phase !== 'racing' || this.heat < CHASE.spikeHeat || this.t < this.nextSpike) return
+    const rob = this.robbers.find(r => !r.left && !r.arrested && !r.escaped)
+    if (!rob || !this.cops.some(o => !o.left)) return
+    const c = rob.car, v = speedOf(c)
+    this.nextSpike = this.t + 1 // 置けなかったら1秒後にもう一度
+    if (v < 8 || this.spikes.length >= CHASE.spikeMax) return
+    const ahead = Math.max(CHASE.spikeAheadMin, v * CHASE.spikeLead)
+    const px = c.x + c.vx / v * ahead, pz = c.z + c.vz / v * ahead
+    // 一番近い道の真ん中の線へ
+    let best = null, bd = 1e9
+    for (const sg of this.world.segs || []) {
+      if (sg.surf !== 'road') continue
+      const dx = sg.bx - sg.ax, dz = sg.bz - sg.az, L = Math.hypot(dx, dz)
+      if (L < 30) continue
+      const u = Math.max(12, Math.min(L - 12, ((px - sg.ax) * dx + (pz - sg.az) * dz) / L))
+      const qx = sg.ax + dx / L * u, qz = sg.az + dz / L * u
+      const d = Math.hypot(px - qx, pz - qz)
+      if (d < bd) { bd = d; best = { sg, qx, qz, ux: dx / L, uz: dz / L } }
+    }
+    if (!best || bd > best.sg.hw + 4) return
+    // 犯人がその道に沿って走っているときだけ（交差点の横切りには置かない）
+    if (Math.abs(c.vx / v * best.ux + c.vz / v * best.uz) < 0.8) return
+    if (Math.hypot(best.qx - c.x, best.qz - c.z) < CHASE.spikeAheadMin * 0.8) return
+    const hw = best.sg.hw, len = hw * 2 * CHASE.spikeCover
+    const side = this.rng() < 0.5 ? -1 : 1 // 塞ぐ側
+    const nx = -best.uz, nz = best.ux      // 道を横切る向き
+    const off = side * (hw - len / 2)
+    const sp = { id: ++this.spikeSeq, x: best.qx + nx * off, z: best.qz + nz * off, yaw: Math.atan2(nx, nz), len, at: this.t, until: this.t + CHASE.spikeLife }
+    this.spikes.push(sp)
+    this.nextSpike = this.t + CHASE.spikeEvery[this.heat]
+    this.events.push({ t: 'spike', ...sp })
+  }
+
+  // 踏んだか（ここで動かしている犯人の車だけ。オンラインでは自分の画面が自分の車を見る）
+  checkSpikes() {
+    if (this.phase !== 'racing' || !this.spikes.length) return
+    for (const r of this.robbers) {
+      if (r.remote || r.left || r.arrested || r.escaped) continue
+      const c = r.car
+      if (!c.grounded) continue
+      for (const sp of this.spikes) {
+        const key = sp.id + ':' + r.id
+        if (this.spikeHits.has(key)) continue
+        const dx = c.x - sp.x, dz = c.z - sp.z
+        const along = dx * Math.sin(sp.yaw) + dz * Math.cos(sp.yaw), across = dx * Math.cos(sp.yaw) - dz * Math.sin(sp.yaw)
+        if (Math.abs(along) < sp.len / 2 + 0.9 && Math.abs(across) < 1.8) {
+          this.spikeHits.add(key)
+          puncture(c)
+          this.events.push({ t: 'punctured', id: r.id, spike: sp.id, x: c.x, z: c.z })
+        }
+      }
+    }
+  }
+
+  // 2点の間に背の高い建物がないか（上から見た線分と箱）
+  clearShot(ax, az, bx, bz) {
+    const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), z0 = Math.min(az, bz), z1 = Math.max(az, bz)
+    for (const w of this.walls) {
+      const rr = Math.max(w.hw, w.hl) * 1.5
+      if (w.cx + rr < x0 || w.cx - rr > x1 || w.cz + rr < z0 || w.cz - rr > z1) continue
+      // 箱の向きにそろえてから、線分が箱を通るか調べる
+      const cs = Math.cos(w.yaw || 0), sn = Math.sin(w.yaw || 0)
+      const lx = (x, z) => (x - w.cx) * cs - (z - w.cz) * sn
+      const lz = (x, z) => (x - w.cx) * sn + (z - w.cz) * cs
+      const px = lx(ax, az), pz = lz(ax, az), dx = lx(bx, bz) - px, dz = lz(bx, bz) - pz
+      let t0 = 0, t1 = 1, ok = true
+      for (const [p0, dd, h] of [[px, dx, w.hw], [pz, dz, w.hl]]) {
+        if (Math.abs(dd) < 1e-9) { if (p0 < -h || p0 > h) { ok = false; break } continue }
+        let u = (-h - p0) / dd, v = (h - p0) / dd
+        if (u > v) [u, v] = [v, u]
+        t0 = Math.max(t0, u); t1 = Math.min(t1, v)
+        if (t0 > t1) { ok = false; break }
+      }
+      if (ok) return false
+    }
+    return true
   }
 
   // 1台が動いたあとの出来事（ニトロ缶・一般車・大破）。オンラインのサーバーは人の位置が届いたときにも呼ぶ
@@ -605,6 +726,8 @@ export class Chase {
       heli: { active: this.heli.active, x: Math.round(this.heli.x), z: Math.round(this.heli.z) },
       strikes: this.strikes.filter(s => !s.done).map(s => ({ id: s.id, x: Math.round(s.x * 10) / 10, z: Math.round(s.z * 10) / 10, at: Math.round(s.at * 100) / 100, r: s.r, target: s.target })),
       downs: (this.downs = this.downs.filter(d => this.t - d.at < 3)).map(d => ({ ...d })),
+      spikes: this.spikes.map(sp => ({ id: sp.id, x: Math.round(sp.x * 10) / 10, z: Math.round(sp.z * 10) / 10, yaw: Math.round(sp.yaw * 1000) / 1000, len: Math.round(sp.len * 10) / 10, at: sp.at, until: sp.until })),
+      shots: this.shots.map(s => ({ id: s.id, by: s.by, fx: Math.round(s.fx * 10) / 10, fz: Math.round(s.fz * 10) / 10, tx: Math.round(s.tx * 10) / 10, tz: Math.round(s.tz * 10) / 10, hit: s.hit })),
       blasts: this.blasts.map(b => ({ id: b.id, x: b.x, z: b.z, at: b.at, hit: b.hit })),
       reps: Object.fromEntries(this.entries.map(e => [e.id, [Math.round((e.rep || 0) * 100) / 100, Math.ceil(e.repairCd || 0), e.repairs || 0, e.repSeen ? 1 : 0]]))
     }
@@ -627,6 +750,21 @@ export function blast(c, s, rng = Math.random) {
   c.dmg.engine = Math.max(0.15, c.dmg.engine - a * 0.5)
   c.dmg.tires = Math.max(0.15, c.dmg.tires - a * 0.4)
   c.events.push({ t: 'blasted', x: s.x, z: s.z })
+}
+
+// 拳銃の命中: 車体が少し傷み、少しよろける。弾だけでは大破しない（車体は 12% より下がらない）
+export function gunHit(c) {
+  const a = CHASE.gunDamage / (c.stats ? c.stats.durability : 1)
+  c.dmg.body = Math.max(CHASE.gunFloor, c.dmg.body - a)
+  c.dmg.tires = Math.max(0.3, c.dmg.tires - a * 0.3)
+  c.events.push({ t: 'shotHit' })
+}
+
+// スパイクベルトを踏んだ: パンク（タイヤがほぼ効かず、最高速も落ちる）。修理工場か大破からの復帰で直る
+export function puncture(c) {
+  c.flat = true
+  c.dmg.tires = Math.min(c.dmg.tires, 0.15)
+  c.vx *= 0.85; c.vz *= 0.85
 }
 
 // 警察車: 犯人に突っ込まれると壊れやすく、大破すると長く止まる

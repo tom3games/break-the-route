@@ -168,6 +168,23 @@ export class Audio {
   }
   // ロックオンの警告音（ピピッ）
   lockon() { for (let i = 0; i < 3; i++) this._tone({ freq: 1800, to: 1800, dur: 0.05, gain: 0.08, type: 'square', when: i * 0.09 }) }
+  // 拳銃の発砲音（乾いた破裂音）
+  gunshot(power = 1) {
+    this._burst({ freq: 2400, type: 'highpass', dur: 0.09, gain: 0.5 * power, decay: 0.08 })
+    this._burst({ freq: 900, dur: 0.18, gain: 0.35 * power, decay: 0.16 })
+    this._tone({ freq: 160, to: 60, dur: 0.1, gain: 0.35 * power })
+  }
+  // パンク（破裂音と空気が抜ける音）
+  puncture() {
+    this._burst({ freq: 1800, type: 'highpass', dur: 0.12, gain: 0.6, decay: 0.1 })
+    this._burst({ freq: 3000, type: 'bandpass', q: 0.6, dur: 0.9, gain: 0.25, decay: 0.85 })
+    this._tone({ freq: 140, to: 50, dur: 0.18, gain: 0.5 })
+  }
+  // 自分の車に弾が当たった（金属に跳ねる音）
+  ricochet() {
+    this._tone({ freq: 3200, to: 1400, dur: 0.16, gain: 0.08, type: 'triangle' })
+    this._burst({ freq: 5000, type: 'bandpass', q: 4, dur: 0.05, gain: 0.25, decay: 0.05 })
+  }
   // 着弾の爆発
   explosion(power = 1) {
     this._burst({ freq: 700, dur: 1.4, gain: 0.9 * power, decay: 1.3 })

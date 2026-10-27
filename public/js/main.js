@@ -3,7 +3,7 @@
 import * as THREE from 'three'
 import { GAME, CARS, UPGRADES, PAINTS, DESTRUCT, CHASE, buildStats } from '../shared/config.js'
 import { createWorld, FALL_SEC, terrain } from '../shared/track.js'
-import { Chase, mulberry, COP_PAINT, ROBBER_PAINT, blast } from '../shared/chase.js'
+import { Chase, mulberry, COP_PAINT, ROBBER_PAINT, blast, gunHit } from '../shared/chase.js'
 import { createNav } from '../shared/citynav.js'
 import { speedOf } from '../shared/physics.js'
 import { createDriver, drive, planRoute } from '../shared/ai.js'
@@ -455,6 +455,72 @@ function updateStrikes(now) {
   })
 }
 const _hv = new THREE.Vector3()
+// 拳銃の弾道（一瞬だけ光る線）
+const tracers = []
+{
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending, fog: false })
+  const geo = new THREE.BoxGeometry(0.07, 0.07, 1).translate(0, 0, 0.5)
+  for (let i = 0; i < 12; i++) { const m = new THREE.Mesh(geo, mat.clone()); m.visible = false; scene.add(m); tracers.push({ m, life: 0 }) }
+}
+function fireTracer(ev) {
+  const shooter = race && race.entry(ev.by)
+  const from = shooter ? shooter.car : { x: ev.fx, y: world.groundAt(ev.fx, ev.fz, 60).h + 0.6, z: ev.fz, yaw: 0 }
+  const fy = from.y + 1.0
+  const target = ev.hit && ev.hit.length && race.entry(ev.hit[0])
+  const tx = target ? target.car.x : ev.tx, tz = target ? target.car.z : ev.tz
+  const ty = target ? target.car.y + 0.6 : world.groundAt(ev.tx, ev.tz, 60).h + 0.1
+  const t = tracers.find(t => t.life <= 0) || tracers[0]
+  t.m.position.set(from.x, fy, from.z)
+  t.m.lookAt(tx, ty, tz)
+  t.m.scale.z = Math.hypot(tx - from.x, ty - fy, tz - from.z)
+  t.m.visible = true; t.life = 0.07; t.m.material.opacity = 0.95
+  // 銃口の光
+  fx.emit(from.x, fy, from.z, { life: 0.07, size: 1.6, grow: 2, r: 1, g: 0.85, b: 0.4, a: 1, add: true })
+  if (target) fx.sparks(tx, ty, tz, 8, null, 7)
+  else fx.dust(tx, ty, tz, 2, [0.6, 0.58, 0.55], 0.35)
+}
+// スパイクベルト: 黒い帯にとがった歯、両端に三角コーン
+const spikeFx = []
+{
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.6, metalness: 0.4 })
+  const toothMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d8, roughness: 0.25, metalness: 0.9, emissive: 0x332a00, emissiveIntensity: 0.4 })
+  const coneMat = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4a00, emissiveIntensity: 0.6 })
+  const lineMat = new THREE.MeshBasicMaterial({ color: 0xffd400, transparent: true, opacity: 0.85, depthWrite: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 })
+  const tooth = new THREE.ConeGeometry(0.13, 0.42, 4).translate(0, 0.21, 0)
+  for (let i = 0; i < 3; i++) {
+    const g = new THREE.Group()
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1, 0.1, 0.6), baseMat); base.position.y = 0.05
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.2).rotateX(-Math.PI / 2), lineMat); glow.position.y = 0.08; glow.renderOrder = 4
+    const teeth = new THREE.InstancedMesh(tooth, toothMat, 80)
+    const cones = [0, 1].map(() => { const m = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.2, 10).translate(0, 0.6, 0), coneMat); g.add(m); return m })
+    g.add(glow, base, teeth); g.visible = false; scene.add(g)
+    spikeFx.push({ g, base, glow, teeth, cones, id: 0 })
+  }
+}
+const _m4 = new THREE.Matrix4()
+function updateSpikes(now) {
+  const list = race && race.phase === 'racing' ? (race.spikes || []) : []
+  spikeFx.forEach((f, i) => {
+    const sp = list[i]
+    f.g.visible = !!sp
+    if (!sp) return
+    if (f.id !== sp.id) {
+      f.id = sp.id
+      f.g.position.set(sp.x, world.groundAt(sp.x, sp.z, 60).h + 0.02, sp.z)
+      f.g.rotation.y = sp.yaw - Math.PI / 2
+      f.base.scale.x = sp.len; f.glow.scale.x = sp.len + 1
+      const n = Math.min(80, Math.floor(sp.len / 0.3))
+      f.teeth.count = n
+      for (let k = 0; k < n; k++) { _m4.makeTranslation(-sp.len / 2 + (k + 0.5) * sp.len / n, 0.09, (k % 2 ? 0.14 : -0.14)); f.teeth.setMatrixAt(k, _m4) }
+      f.teeth.instanceMatrix.needsUpdate = true
+      f.cones[0].position.x = -sp.len / 2 - 0.6; f.cones[1].position.x = sp.len / 2 + 0.6
+    }
+    f.glow.material.opacity = 0.6 + Math.sin(now / 110) * 0.35
+  })
+}
+function updateTracers(dt) {
+  for (const t of tracers) if (t.life > 0) { t.life -= dt; t.m.material.opacity = Math.max(0, t.life / 0.07); if (t.life <= 0) t.m.visible = false }
+}
 
 // オンライン: サーバーの判定（逮捕ゲージ・手配度・隠れ家・結末）を写す
 function applyChaseSummary(ch) {
@@ -482,6 +548,16 @@ function applyChaseSummary(ch) {
     seenStrikes.add(k)
     race.events.push({ t: 'copDown', ...d })
   }
+  if (ch.spikes) {
+    for (const sp of ch.spikes) if (!seenStrikes.has('k' + sp.id)) { seenStrikes.add('k' + sp.id); race.events.push({ t: 'spike', ...sp }) }
+    race.spikes = ch.spikes
+  }
+  for (const s of ch.shots || []) {
+    if (seenStrikes.has('s' + s.id)) continue
+    seenStrikes.add('s' + s.id)
+    if (me && s.hit.includes(myId)) gunHit(me)
+    race.events.push({ t: 'shot', ...s })
+  }
   for (const b of ch.blasts || []) {
     if (seenStrikes.has('b' + b.id)) continue
     seenStrikes.add('b' + b.id)
@@ -494,7 +570,7 @@ function applyChaseSummary(ch) {
     e.rep = rep; e.repairCd = cd; e.repSeen = !!seen
     if (n > (e.repairs || 0)) {
       e.repairs = n
-      if (e.car === me) { for (const k in me.dmg) me.dmg[k] = 1; me.dents.length = 0; me.boost = 1 }
+      if (e.car === me) { for (const k in me.dmg) me.dmg[k] = 1; me.flat = false; me.dents.length = 0; me.boost = 1 }
       race.events.push({ t: 'repaired', id, n, lost: e.role === 'robber' })
     }
   }
@@ -909,6 +985,9 @@ function handleEvents(e) {
         if (vol) audio.crash(1.5 * vol)
         if (mine && ev.kind !== 'knock') { hud.message(t('msgWreck'), '', 1.4); fx.addShake(1.4) }
         break
+      case 'shotHit':
+        if (mine) { hud.flashDamage(0.12); fx.addShake(0.25); audio.ricochet() }
+        break
       case 'fall': if (mine) hud.message(t('msgFall'), '', 1.6); break
       case 'overheat': if (mine) hud.message(t('msgOverheat'), '', 1.4); break
       case 'boostEmpty': if (mine) hud.toast(t('msgBoostEmpty')); break
@@ -1043,6 +1122,8 @@ function frame() {
   updateSirens(now)
   updateHeli(paused ? 0 : dt, now)
   updateStrikes(now)
+  updateTracers(dt)
+  updateSpikes(now)
   fx.update(paused ? 0 : dt)
 
   // 影は車の周りだけ
@@ -1132,7 +1213,7 @@ function raceEvent(ev) {
     audio.radio()
   }
   if (ev.t === 'heat') {
-    hud.radio(ev.heat === CHASE.heli ? t('radioHeli') : t('radioHeat').replace('{n}', ev.heat), 2.6)
+    hud.radio(ev.heat === CHASE.heli ? t('radioHeli') : ev.heat === CHASE.gunHeat ? t(cop ? 'radioGunCop' : 'radioGunRobber') : t('radioHeat').replace('{n}', ev.heat), ev.heat === CHASE.gunHeat ? 3.4 : 2.6)
     audio.radio()
   }
   if (ev.t === 'hideout' && !cop) { hud.radio(t('radioHideout').replace('{area}', trArea(ev.area)), 4); hud.message(t('toHideout'), trArea(ev.area), 2); audio.cp() }
@@ -1144,6 +1225,22 @@ function raceEvent(ev) {
     // 逮捕: スローと赤青の光
     slowMo(0.3, 1.5); hud.flashScreen('bust'); fx.addShake(1)
     if (r) for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2; fx.emit(r.car.x, r.car.y + 0.8, r.car.z, { vx: Math.cos(a) * 10, vy: 1 + Math.random() * 3, vz: Math.sin(a) * 10, life: 0.8, size: 1.2, grow: 1.5, r: i % 2 ? 1 : 0.2, g: 0.2, b: i % 2 ? 0.25 : 1, a: 0.9, add: true }) }
+  }
+  if (ev.t === 'shot') {
+    fireTracer(ev)
+    const near = Math.hypot(me.x - ev.fx, me.z - ev.fz)
+    if (near < 140) audio.gunshot(Math.max(0.15, 1 - near / 140))
+    if (!cop && ev.hit && ev.hit.includes(myId) && !race._shotOnce) { race._shotOnce = true; hud.message(t('msgShot'), t('msgShotSub'), 1.6) }
+  }
+  if (ev.t === 'spike') {
+    if (cop) { hud.radio(t('radioSpikeCop'), 2.4); audio.radio() }
+    else { hud.radio(t('radioSpikeRobber'), 3); audio.radio(); if (!race._spikeOnce) { race._spikeOnce = true; hud.message(t('msgSpike'), t('msgSpikeSub'), 1.8) } }
+  }
+  if (ev.t === 'punctured') {
+    const r = race.entry(ev.id)
+    if (r) fx.sparks(r.car.x, r.car.y - 0.3, r.car.z, 26, null, 9)
+    if (ev.id === myId) { hud.message(t('msgFlat'), t('msgFlatSub'), 2); audio.puncture(); fx.addShake(0.8); hud.flashDamage(0.3) }
+    else if (cop) { hud.radio(t('radioFlat'), 2.4); audio.radio() }
   }
   if (ev.t === 'heli') { hud.radio(cop ? t('radioHeliCop') : t('radioHeliRobber'), 3.2); audio.radio() }
   if (ev.t === 'strikeWarn') {

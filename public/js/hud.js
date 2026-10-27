@@ -242,6 +242,12 @@ export class HUD {
     // ランチャーの予告
     g.strokeStyle = '#ff2a2a'; g.lineWidth = 3 / sc
     for (const s2 of race.strikes || []) if (!s2.done) { g.beginPath(); g.arc(-s2.x, -s2.z, s2.r, 0, Math.PI * 2); g.stroke() }
+    // スパイクベルト（黄色い線）
+    g.strokeStyle = '#ffd400'; g.lineWidth = 5 / sc
+    for (const sp of race.spikes || []) {
+      const hx = Math.sin(sp.yaw) * sp.len / 2, hz = Math.cos(sp.yaw) * sp.len / 2
+      g.beginPath(); g.moveTo(-(sp.x - hx), -(sp.z - hz)); g.lineTo(-(sp.x + hx), -(sp.z + hz)); g.stroke()
+    }
     // 隠れ家（犯人にだけ。開いたら緑）
     const H = race.hideout
     if (H && this.role === 'robber') {

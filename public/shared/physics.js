@@ -53,7 +53,7 @@ export function respawn(c, { repair = false, safe = true } = {}) {
   c.stunt = null
   if (sp) { c.vx = Math.sin(p.yaw) * 22; c.vz = Math.cos(p.yaw) * 22; c.safeHist = [] }
   c.grounded = true; c.airTime = 0; c.falling = false
-  if (repair) { for (const k in c.dmg) c.dmg[k] = Math.max(c.dmg[k], GAME.wreckRepairTo); c.dents.length = 0 }
+  if (repair) { for (const k in c.dmg) c.dmg[k] = Math.max(c.dmg[k], GAME.wreckRepairTo); c.dents.length = 0; c.flat = false }
   c.wreck = 0
   c.freeze = sp ? 0.25 : GAME.respawnFreezeSec
   c.boostLock = false
@@ -105,7 +105,7 @@ export function step(c, inp, dt, world, others = null) {
   // 性能（損傷とオーバーヒートで落ちる）
   const hot = c.overheat
   const rb = c.rb || 1 // CPU の追い上げ・手加減（人間は常に 1）
-  const maxSpd = S.maxSpeed * (0.6 + 0.4 * d.engine) * (hot ? 0.82 : 1) * rb
+  const maxSpd = S.maxSpeed * (0.6 + 0.4 * d.engine) * (hot ? 0.82 : 1) * rb * (c.flat ? 0.72 : 1) // パンク（スパイクベルト）
   const accel = S.accel * (0.5 + 0.5 * d.engine) * (hot ? 0.75 : 1) * rb
   const grip = S.grip * (0.55 + 0.45 * d.tires)
   const steerK = S.steer * (0.7 + 0.3 * d.tires)

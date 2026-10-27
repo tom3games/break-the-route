@@ -282,3 +282,91 @@ test('結果の車体は決着した瞬間の値（大破で逮捕されたあ�
   const r = ch.results().find(x => x.id === 'r')
   assert.equal(r.body, 0)
 })
+
+test('拳銃: 手配度1では撃たず、2から CPU の警察が近くの犯人を撃つ。建物の陰には当たらず、弾だけでは大破しない', () => {
+  const ch = new Chase(city(), { seed: 5 })
+  const rob = ch.addHuman({ id: 'r', name: 'R', role: 'robber' })
+  ch.addBots(1, 'cop')
+  const cop = ch.cops[0].car
+  run(ch, GAME.countdownSec + 3.2)
+  // 開けた道の上: 犯人の 25m 後ろに警察を置き続ける
+  const hold = (dx, dz) => { rob.vx = rob.vz = 0; cop.x = rob.x + dx; cop.z = rob.z + dz; cop.y = rob.y; cop.vx = cop.vz = 0 }
+  const shotsFor = (sec, dx, dz) => {
+    const out = []
+    for (let i = 0; i < sec * 60; i++) { hold(dx, dz); ch.stepFixed(DT, {}); out.push(...ch.events.filter(e => e.t === 'shot')); ch.events.length = 0; rob.events.length = 0; cop.events.length = 0; ch.robbers[0].bust = 0 }
+    return out
+  }
+  const open = [[25, 0], [-25, 0], [0, 25], [0, -25]].find(([dx, dz]) => ch.clearShot(rob.x + dx, rob.z + dz, rob.x, rob.z))
+  assert.ok(open, '開けた向きがある')
+  assert.equal(ch.heat, 1)
+  assert.equal(shotsFor(4, ...open).length, 0, '手配度1では撃たない')
+  ch.heatBonus = 1
+  rob.dmg.body = 1
+  const shots = shotsFor(6, ...open)
+  assert.equal(ch.heat, 2)
+  assert.ok(shots.length >= 3, `撃つ ${shots.length}`)
+  assert.ok(shots.some(s => s.hit.includes('r')), '当たる弾がある')
+  assert.ok(rob.dmg.body < 1, '当たると傷む')
+  // 何発当たっても大破しない
+  ch.heatBonus = 4
+  shotsFor(60, ...open)
+  assert.ok(rob.dmg.body >= CHASE.gunFloor - 1e-9 && !(rob.wreck > 0), `大破しない ${rob.dmg.body}`)
+  // 建物の向こう: 撃たない
+  const wall = ch.walls.find(w => w.hw > 10 && w.hl > 10 && !w.yaw)
+  assert.ok(wall, '建物がある')
+  assert.equal(ch.clearShot(wall.cx - wall.hw - 5, wall.cz, wall.cx + wall.hw + 5, wall.cz), false, '建物が弾を遮る')
+  assert.equal(ch.clearShot(wall.cx - wall.hw - 5, wall.cz - wall.hl - 5, wall.cx + wall.hw + 5, wall.cz - wall.hl - 5), true, '建物の外側は通る')
+  // 遠い（射程の外）と撃たない
+  assert.equal(shotsFor(4, open[0] * 4, open[1] * 4).length, 0, '射程の外では撃たない')
+})
+
+test('スパイクベルト: 手配度4から犯人の行く手の道に敷き、踏むとパンク（遅く滑る）。空いた側は通れる。警察は踏んでも平気。修理で直る', async () => {
+  const { puncture } = await import('../public/shared/chase.js')
+  const { ch, rob, copCars } = chase()
+  run(ch, GAME.countdownSec + 0.1)
+  for (const c of copCars) { c.x = rob.x + 500; c.z = rob.z }
+  // 長くまっすぐな道の上を走らせる
+  const sg = ch.world.segs.filter(s => s.surf === 'road').sort((a, b) => Math.hypot(b.bx - b.ax, b.bz - b.az) - Math.hypot(a.bx - a.ax, a.bz - a.az))[0]
+  const L = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az), ux = (sg.bx - sg.ax) / L, uz = (sg.bz - sg.az) / L
+  const put = u => { rob.x = sg.ax + ux * u; rob.z = sg.az + uz * u; rob.vx = ux * 30; rob.vz = uz * 30; rob.yaw = Math.atan2(ux, uz) }
+  const spikesFor = (sec, u) => { const out = []; for (let i = 0; i < sec * 60; i++) { put(u); ch.stepFixed(DT, {}); out.push(...ch.events.filter(e => e.t === 'spike')); ch.events.length = 0; rob.events.length = 0 } return out }
+  ch.heatBonus = 2 // 手配度3
+  assert.equal(spikesFor(3, 40).length, 0, '手配度3では敷かない')
+  ch.heatBonus = 3 // 手配度4
+  const sp = spikesFor(3, 40)[0]
+  assert.ok(sp, '手配度4で敷く')
+  const d = Math.hypot(sp.x - rob.x, sp.z - rob.z)
+  assert.ok(d >= CHASE.spikeAheadMin * 0.8 && d < 140, `行く手に置く ${d.toFixed(1)}m`)
+  // 道の上（真ん中の線から道幅の内側）
+  const along = (sp.x - sg.ax) * ux + (sp.z - sg.az) * uz
+  const off = Math.abs((sp.x - sg.ax) * -uz + (sp.z - sg.az) * ux)
+  assert.ok(along > 0 && along < L && off < sg.hw, `道の上 off=${off.toFixed(1)} hw=${sg.hw}`)
+  // 踏む: スパイクの真ん中に置く
+  const hit = () => { ch.stepFixed(DT, {}); const e = ch.events.find(e => e.t === 'punctured'); ch.events.length = 0; rob.events.length = 0; return e }
+  rob.x = sp.x; rob.z = sp.z; rob.vx = ux * 20; rob.vz = uz * 20
+  assert.ok(hit(), 'パンクする')
+  assert.equal(rob.flat, true)
+  assert.ok(rob.dmg.tires <= 0.15)
+  // 同じ帯で2回は数えない
+  rob.x = sp.x; rob.z = sp.z
+  assert.equal(hit(), undefined)
+  // パンクすると最高速が落ちる
+  const top = flat => { const c = createCar({ id: 't', name: 'T', spawn: { x: sg.ax + ux * 60, z: sg.az + uz * 60, yaw: Math.atan2(ux, uz), y: 0 } }); if (flat) puncture(c); for (let i = 0; i < 60 * 8; i++) step(c, { throttle: 1 }, DT, ch.world, []); return speedOf(c) }
+  const v0 = top(false), v1 = top(true)
+  assert.ok(v1 < v0 * 0.85, `パンクで遅い ${v0.toFixed(1)} → ${v1.toFixed(1)}`)
+  // 空いた側を通れば踏まない（帯の端から道の反対側へ 1.5m 外）
+  ch.spikeHits.clear(); rob.flat = false; rob.dmg.tires = 1
+  const s2 = ch.spikes[0]
+  const tx = Math.sin(s2.yaw), tz = Math.cos(s2.yaw)
+  const toCenter = Math.sign((sg.ax + ux * along - s2.x) * tx + (sg.az + uz * along - s2.z) * tz) || 1
+  rob.x = s2.x + tx * toCenter * (s2.len / 2 + 2.5); rob.z = s2.z + tz * toCenter * (s2.len / 2 + 2.5)
+  assert.equal(hit(), undefined, '空いた側は通れる')
+  // 警察の車は踏んでもパンクしない
+  const cc = copCars[0]; cc.x = s2.x; cc.z = s2.z
+  ch.stepFixed(DT, {}); ch.events.length = 0
+  assert.ok(!cc.flat, '警察はパンクしない')
+  // 修理で直る
+  rob.flat = true
+  ch.completeRepair(ch.entry('r'))
+  assert.equal(rob.flat, false)
+})
